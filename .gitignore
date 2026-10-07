@@ -1,0 +1,10 @@
+node_modules/
+
+.env
+.env.*
+!.env.example
+
+data/store.json
+data/cache/
+images/
+output/
