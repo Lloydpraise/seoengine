@@ -73,7 +73,7 @@ test('publishing an imported product updates its name and unique slug in place',
     slug: 'old-name',
     final,
   });
-  assert.equal(await engine.publish(renamed.id), 'https://shop.test/products/new-product-name-2');
+  assert.equal(await engine.publish(renamed.id), 'https://shop.test/product/new-product-name-2');
   assert.equal(renamed.slug, 'new-product-name-2');
 
   const unchanged = engine.newProduct({
@@ -82,14 +82,14 @@ test('publishing an imported product updates its name and unique slug in place',
     slug: 'same-name',
     final,
   });
-  assert.equal(await engine.publish(unchanged.id), 'https://shop.test/products/same-name');
+  assert.equal(await engine.publish(unchanged.id), 'https://shop.test/product/same-name');
   assert.equal(unchanged.slug, 'same-name');
 
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[0].body, {
     name: 'New Product Name',
     slug: 'new-product-name-2',
-    canonical_url: 'https://shop.test/products/new-product-name-2',
+    canonical_url: 'https://shop.test/product/new-product-name-2',
     description: 'Product details',
     meta_title: 'Updated product title',
     meta_description: 'Updated description',
@@ -98,7 +98,7 @@ test('publishing an imported product updates its name and unique slug in place',
   assert.deepEqual(requests[1].body, {
     name: 'Same Name',
     slug: 'same-name',
-    canonical_url: 'https://shop.test/products/same-name',
+    canonical_url: 'https://shop.test/product/same-name',
     description: 'Product details',
     meta_title: 'Updated product title',
     meta_description: 'Updated description',

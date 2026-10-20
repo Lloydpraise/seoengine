@@ -9,7 +9,7 @@ Tests: `npm test`
 3. **Facts**: specs are extracted from the competitor pages with confidence ratings. Conflicts and wrong-variant warnings are flagged.
 4. **Write**: the AI gets the facts, YOUR product notes, shop/category knowledge, Kenya keywords, and the reference style, with a rule to use only those facts.
 5. **Check** (automatic): title/meta length, keyword placement, length vs the style, numbers not in your facts, wording copied from competitors, similarity to your other pages. One automatic rewrite if checks fail.
-6. **Review** (you): edit, rewrite with a note, approve, or approve and publish.
+6. **Review** (you): the Review screen is four columns side by side: the product list, the editor, a live preview (product photo on top), and the sources and checks (each card collapsible; the list and sources columns collapse to a thin rail). Edit, rewrite with a note, approve, or approve and publish. The big **Approve all** button at the top approves everything waiting for review in one click (failed checks included, nothing is published), so you can let the engine run, approve in bulk, then come back through the Approved tab and fix what needs it.
 7. **Publish**: only then does anything touch your live `products` table.
 
 Existing products (imported from Supabase) are updated in place: only description, meta_title, meta_description, alt_text and categories change. Name, slug, price, image stay.

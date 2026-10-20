@@ -147,6 +147,7 @@ app.post('/api/queue/pause', wrap(() => { engine.pause(); return engine.qstats()
 app.post('/api/products/:id/final', wrap(async (req) => { const p = getP(req); await engine.setFinal(p, req.body.final); return { qa: p.qa }; }));
 app.post('/api/products/:id/regenerate', wrap((req) => { getP(req); engine.regenerate(req.params.id, req.body); return { started: true }; }));
 app.post('/api/products/:id/approve', wrap((req) => { const p = getP(req); if (!p.final) throw new Error('Nothing to approve'); engine.touch(p, { status: 'approved', stage: 'Approved' }); }));
+app.post('/api/approve-all', wrap(() => engine.approveAll()));
 app.post('/api/products/:id/reopen', wrap((req) => { const p = getP(req); engine.touch(p, { status: 'review', stage: 'Ready for review' }); }));
 app.post('/api/products/:id/publish', wrap(async (req) => ({ url: await engine.publish(getP(req).id) })));
 app.post('/api/publish-approved', wrap(async () => {

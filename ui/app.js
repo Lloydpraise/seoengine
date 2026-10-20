@@ -23,7 +23,11 @@ const STATUS = ['new', 'queued', 'working', 'review', 'approved', 'published', '
 const LABEL = { new: 'New', queued: 'Queued', working: 'Working', review: 'To review', approved: 'Approved', published: 'Published', error: 'Needs attention' };
 const badge = (s) => `<span class="badge b-${s}">${LABEL[s] || s}</span>`;
 
-const S = { products: [], profiles: [], knowledge: {}, settings: {}, keys: {}, queue: {}, view: 'queue', filter: 'all', q: '', sel: new Set(), drawer: null, rv: null, rvTab: 'review', csv: null };
+/* review-screen layout memory: which side panels are collapsed, which source cards are open */
+const loadPanes = () => { try { return JSON.parse(localStorage.getItem('seoengine.panes')) || {}; } catch (e) { return {}; } };
+const savePanes = () => { try { localStorage.setItem('seoengine.panes', JSON.stringify(S.panes)); } catch (e) { /* storage unavailable: layout just won't persist */ } };
+
+const S = { products: [], profiles: [], knowledge: {}, settings: {}, keys: {}, queue: {}, view: 'queue', filter: 'all', q: '', sel: new Set(), drawer: null, rv: null, rvTab: 'review', csv: null, panes: loadPanes() };
 
 async function load() {
   Object.assign(S, await api('/state'));
@@ -40,7 +44,7 @@ function renderNav() {
     `<div class="spacer"></div><a href="/productprices.html">Configure prices</a>` +
     (miss.length ? `<div class="keys">Missing in .env: <b>${miss.join(', ')}</b></div>` : '');
 }
-function render() { renderNav(); ({ queue: viewQueue, add: viewAdd, competitors: viewCompetitors, review: viewReview, styles: viewStyles, knowledge: viewKnowledge, csv: viewCsv, export: viewExport, settings: viewSettings })[S.view](); }
+function render() { main.className = S.view === 'review' ? 'wide' : ''; renderNav(); ({ queue: viewQueue, add: viewAdd, competitors: viewCompetitors, review: viewReview, styles: viewStyles, knowledge: viewKnowledge, csv: viewCsv, export: viewExport, settings: viewSettings })[S.view](); }
 
 /* ---------- live updates ---------- */
 let tblT;
@@ -167,15 +171,32 @@ const upload = guard(async (files) => {
 
 /* ---------- review ---------- */
 const reviewable = () => S.products.filter((p) => (S.rvTab === 'review' ? ['review', 'working'].includes(p.status) : ['approved', 'published'].includes(p.status)));
+const toggleBtn = (k, label, glyph) => `<button class="paneToggle" data-act="togglePane" data-v="${k}" aria-expanded="${!S.panes[k]}" title="Show or hide ${esc(label.toLowerCase())}"><span class="chev" aria-hidden="true">${glyph}</span><span class="lbl">${esc(label)}</span></button>`;
 function viewReview() {
-  main.innerHTML = `<div class="review"><div><div class="row" style="margin-bottom:8px"><button class="chip" data-act="rvTab" data-v="review" aria-pressed="${S.rvTab === 'review'}">To review</button><button class="chip" data-act="rvTab" data-v="approved" aria-pressed="${S.rvTab === 'approved'}">Approved</button></div><div class="rlist" id="rl"></div></div><div id="ed"></div><div class="ev" id="ev"></div></div>`;
+  main.innerHTML = `<div id="aabar"></div>
+  <div class="review ${S.panes.rl ? 'rl-off' : ''} ${S.panes.ev ? 'ev-off' : ''}" id="rvgrid">
+    <div class="pane pane-rl">${toggleBtn('rl', 'Products', '‹')}<div class="rlbody"><div class="row" style="margin-bottom:8px"><button class="chip" data-act="rvTab" data-v="review" aria-pressed="${S.rvTab === 'review'}">To review</button><button class="chip" data-act="rvTab" data-v="approved" aria-pressed="${S.rvTab === 'approved'}">Approved</button></div><div class="rlist" id="rl"></div></div></div>
+    <div class="pane pane-ed" id="ed"></div>
+    <div class="pane pane-pv" id="pvp"></div>
+    <div class="pane pane-ev">${toggleBtn('ev', 'Sources & checks', '›')}<div class="ev" id="ev"></div></div>
+  </div>`;
   renderReviewList();
   const list = reviewable();
   if (S.rv && list.some((p) => p.id === S.rv.id)) paintReview();
   else if (list.length) openReview(list[0].id);
-  else { S.rv = null; $('#ed').innerHTML = `<div class="empty">${S.rvTab === 'review' ? 'Nothing waiting for review.<br>Queue products and start the AI, then come back.' : 'Nothing approved yet.'}</div>`; $('#ev').innerHTML = ''; }
+  else { S.rv = null; $('#ed').innerHTML = `<div class="empty">${S.rvTab === 'review' ? 'Nothing waiting for review.<br>Queue products and start the AI, then come back.' : 'Nothing approved yet.'}</div>`; $('#pvp').innerHTML = ''; $('#ev').innerHTML = ''; }
+}
+function paintApproveAll() {
+  const el = $('#aabar'); if (!el) return;
+  if (S.rvTab !== 'review') { el.innerHTML = ''; return; }
+  const ready = S.products.filter((p) => p.status === 'review');
+  const bad = ready.filter((p) => p.qaErrors).length;
+  const busy = S.products.filter((p) => p.status === 'working' || p.status === 'queued').length;
+  const n = ready.length;
+  el.innerHTML = `<button class="btn good giant" data-act="approveAll" ${n ? '' : 'disabled'}>${n ? `Approve all ${n} product${n === 1 ? '' : 's'}` : 'Nothing to approve yet'}<small>${n ? `${bad ? `${bad} with failed checks will be approved too. ` : ''}Nothing is published. Edit any of them afterwards under Approved.` : 'Pages appear here as the AI finishes them.'}</small></button>${busy ? `<span class="muted small"><span class="spin"></span>${busy} still being written</span>` : ''}`;
 }
 function renderReviewList() {
+  paintApproveAll();
   const el = $('#rl'); if (!el) return;
   const list = reviewable();
   el.innerHTML = list.length ? list.map((p) => `<button data-act="openRv" data-id="${p.id}" ${S.rv && S.rv.id === p.id ? 'aria-current="true"' : ''}><span class="nm">${p.status === 'working' ? '<span class="spin"></span>' : `<span class="dot ${p.qaPass === false ? 'bad' : ''}"></span>`}${esc(p.name)}</span><span class="small muted">${p.status === 'published' ? 'Published' : p.status === 'approved' ? 'Approved' : p.qaErrors ? p.qaErrors + ' check(s) failed' : 'Checks passed'}</span></button>`).join('') : '<div class="small muted" style="padding:12px">Empty</div>';
@@ -195,8 +216,8 @@ function paintReview() { paintEditor(); paintEvidence(); }
 function paintEditor() {
   const el = $('#ed'); if (!el || !S.rv) return;
   const { p, final: f } = S.rv;
-  if (p.status === 'working' || !f) { el.innerHTML = `<div class="empty"><span class="spin"></span>${esc(p.stage || 'Working')}…</div>`; return; }
-  const url = `${S.settings.siteUrl}/products/${p.slug || '…'}`;
+  if (p.status === 'working' || !f) { el.innerHTML = `<div class="empty"><span class="spin"></span>${esc(p.stage || 'Working')}…</div>`; const pv = $('#pvp'); if (pv) pv.innerHTML = ''; return; }
+  const url = prodUrl(p);
   el.innerHTML = `<div class="editor"><div class="top">
     <strong style="font-size:16px;margin-right:6px">${esc(p.name)}</strong>${badge(p.status)}<span class="small muted" id="savestate">${S.rv.saved ? 'Saved' : 'Unsaved changes…'}</span><span style="flex:1"></span>
     ${p.status === 'published' ? `<span class="small muted">Live: ${esc(p.publishedUrl || '')}</span><button class="btn" data-act="publish">Publish again</button>` :
@@ -206,7 +227,7 @@ function paintEditor() {
     <label>Primary keyword</label>${inp('primary_keyword', f.primary_keyword)}
     <label>Other keywords</label><input type="text" data-f="secondary_keywords" value="${esc(f.secondary_keywords.join(', '))}">
     <label>SEO title ${cnt(f.seo_title, 60)}</label>${inp('seo_title', f.seo_title)}
-    <label>Meta description ${cnt(f.meta_description, 155)}</label><textarea data-f="meta_description" style="min-height:64px">${esc(f.meta_description)}</textarea>
+    <label>Meta description ${cnt(f.meta_description, 155)}</label><textarea data-f="meta_description" style="min-height:88px">${esc(f.meta_description)}</textarea>
     <div class="snippet" aria-label="Google result preview"><div class="u">${esc(url)}</div><div class="t" id="sn-t">${esc(f.seo_title)}</div><div class="m" id="sn-m">${esc(f.meta_description)}</div></div>
     <label>H1</label>${inp('h1', f.h1)}
     <label>Intro</label><textarea data-f="short_description" style="min-height:80px">${esc(f.short_description)}</textarea>
@@ -216,8 +237,17 @@ function paintEditor() {
     <button class="btn" data-act="addRow" data-k="specs">Add spec</button>
     <label>FAQs</label>${f.faqs.map((s, i) => `<div class="block">${inp(`faqs.${i}.q`, s.q, 'Question')}<textarea data-f="faqs.${i}.a" style="margin-top:6px;min-height:64px">${esc(s.a)}</textarea><div class="row end"><button class="btn danger" data-act="delRow" data-k="faqs" data-i="${i}">Remove FAQ</button></div></div>`).join('')}
     <button class="btn" data-act="addRow" data-k="faqs" style="margin-top:8px">Add FAQ</button>
-    <label>Image alt text</label>${inp('alt_text', f.alt_text)}
-    <details style="margin-top:16px"><summary class="muted" style="cursor:pointer">Preview the finished description</summary><div class="pv" id="pv" style="margin-top:10px"></div></details></div>`;
+    <label>Image alt text</label>${inp('alt_text', f.alt_text)}</div>`;
+  paintPreviewPane();
+}
+const prodUrl = (p) => `${String(S.settings.siteUrl || '').replace(/\/+$/, '')}/product/${p.slug || '…'}`;
+// The preview sits in its own column beside the editor, with the product photo on top.
+function paintPreviewPane() {
+  const el = $('#pvp'); if (!el || !S.rv) return;
+  const { p, final: f } = S.rv;
+  if (p.status === 'working' || !f) { el.innerHTML = ''; return; }
+  const img = p.imageUrl || (p.localImage ? '/images/' + encodeURIComponent(p.localImage) : '');
+  el.innerHTML = `<div class="pvpane"><div class="pvhead">Preview</div>${img ? `<img class="pvimg" src="${esc(img)}" alt="${esc(f.alt_text || p.name)}">` : '<div class="pvimg none">No image</div>'}<div class="pvurl">${esc(prodUrl(p))}</div><div class="pv" id="pv"></div></div>`;
   paintPreview();
 }
 function paintPreview() {
@@ -225,14 +255,25 @@ function paintPreview() {
   const P = (t) => String(t || '').split(/\n+/).filter(Boolean).map((x) => `<p>${esc(x)}</p>`).join('');
   el.innerHTML = `<h1 style="font-family:var(--sans)">${esc(f.h1)}</h1>${P(f.short_description)}${f.sections.map((s) => `<h2>${esc(s.heading)}</h2>${P(s.body)}`).join('')}${f.specs.length ? `<h2>Specifications</h2><table><tbody>${f.specs.map((x) => `<tr><th>${esc(x.label)}</th><td>${esc(x.value)}</td></tr>`).join('')}</tbody></table>` : ''}${f.faqs.length ? `<h2>Frequently asked questions</h2>${f.faqs.map((x) => `<h3>${esc(x.q)}</h3><p>${esc(x.a)}</p>`).join('')}` : ''}`;
 }
+// Each card is collapsible; open/closed state is remembered between products and reloads.
+const EV_DEFAULT_OPEN = { 'Quality checks': true, 'Competitor pages read': true };
+const evCard = (title, body) => {
+  const saved = S.panes.open && title in S.panes.open ? S.panes.open[title] : !!EV_DEFAULT_OPEN[title];
+  return `<details class="card evc" data-evk="${esc(title)}" ${saved ? 'open' : ''}><summary>${esc(title)}</summary><div class="evb">${body}</div></details>`;
+};
 function paintEvidence() {
   const el = $('#ev'); if (!el || !S.rv) return; const { p } = S.rv; const q = p.qa; const r = p.research || {}; const facts = (p.facts && p.facts.facts) || [];
-  el.innerHTML = `<div class="card"><h3>Quality checks</h3>${q ? (q.issues.length ? q.issues.map((i) => `<div class="issue ${i.level}">${esc(i.msg)}</div>`).join('') : '<div class="okbox">All checks passed</div>') + `<div class="small muted" style="margin-top:6px">${q.stats.words} words · wording overlap ${Math.round(q.stats.overlap * 100)}% · similarity to your other pages ${Math.round(q.stats.duplicate * 100)}%</div>` : '<span class="muted">Not checked yet</span>'}</div>
-  ${p.unique ? `<div class="card"><h3>Your product knowledge</h3><div class="small" style="white-space:pre-wrap">${esc(p.unique)}</div></div>` : ''}
-  <div class="card"><h3>Facts the AI was allowed to use</h3>${facts.length ? facts.map((f) => `<div class="fact"><span><b>${esc(f.label)}:</b> ${esc(f.value)}</span><span class="${f.confidence === 'low' ? 'lo' : 'muted'}">${esc(f.confidence)}</span><span class="small muted" style="grid-column:1/-1">${esc((f.hosts || []).join(', '))}</span></div>`).join('') : '<span class="muted">None found. The copy relies on your notes.</span>'}${p.facts && p.facts.variant_warning ? `<div class="issue warn" style="margin-top:6px">${esc(p.facts.variant_warning)}</div>` : ''}${(p.facts && p.facts.conflicts || []).map((c) => `<div class="issue warn" style="margin-top:6px">Sources disagree on ${esc(c.label)}: ${esc((c.values || []).join(' vs '))}</div>`).join('')}</div>
-  <div class="card"><h3>Competitor pages read</h3>${(r.sources || []).map((s) => `<div class="small" style="margin-bottom:6px"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.host)}</a><br><span class="muted">${s.words} words · ${s.faqs} FAQs · ${s.specs} specs · ${Math.round((s.fit || 0) * 100)}% match</span>${s.structureOnly ? '<br><span class="lo">Different size or model: used for structure only</span>' : ''}</div>`).join('') || '<span class="muted">None</span>'}${(r.warnings || []).map((w) => `<div class="issue warn">${esc(w)}</div>`).join('')}</div>
-  <div class="card"><h3>Kenya search data</h3>${(r.keywords && r.keywords.related || []).length ? `<div class="tags">${r.keywords.related.map((k) => `<span class="tag">${esc(k)}</span>`).join('')}</div>` : ''}${(r.keywords && r.keywords.questions || []).map((k) => `<div class="small" style="margin-top:4px">${esc(k)}</div>`).join('')}</div>
-  ${p.current && p.current.description ? `<div class="card"><h3>Current text on your site</h3><div class="small muted" style="white-space:pre-wrap;max-height:180px;overflow:auto">${esc(p.current.description)}</div></div>` : ''}`;
+  const checks = q ? (q.issues.length ? q.issues.map((i) => `<div class="issue ${i.level}">${esc(i.msg)}</div>`).join('') : '<div class="okbox">All checks passed</div>') + `<div class="small muted" style="margin-top:6px">${q.stats.words} words · wording overlap ${Math.round(q.stats.overlap * 100)}% · similarity to your other pages ${Math.round(q.stats.duplicate * 100)}%</div>` : '<span class="muted">Not checked yet</span>';
+  const factsHtml = (facts.length ? facts.map((f) => `<div class="fact"><span><b>${esc(f.label)}:</b> ${esc(f.value)}</span><span class="${f.confidence === 'low' ? 'lo' : 'muted'}">${esc(f.confidence)}</span><span class="small muted" style="grid-column:1/-1">${esc((f.hosts || []).join(', '))}</span></div>`).join('') : '<span class="muted">None found. The copy relies on your notes.</span>') + (p.facts && p.facts.variant_warning ? `<div class="issue warn" style="margin-top:6px">${esc(p.facts.variant_warning)}</div>` : '') + ((p.facts && p.facts.conflicts) || []).map((c) => `<div class="issue warn" style="margin-top:6px">Sources disagree on ${esc(c.label)}: ${esc((c.values || []).join(' vs '))}</div>`).join('');
+  const sources = ((r.sources || []).map((s) => `<div class="small" style="margin-bottom:6px"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.host)}</a><br><span class="muted">${s.words} words · ${s.faqs} FAQs · ${s.specs} specs · ${Math.round((s.fit || 0) * 100)}% match</span>${s.structureOnly ? '<br><span class="lo">Different size or model: used for structure only</span>' : ''}</div>`).join('') || '<span class="muted">None</span>') + (r.warnings || []).map((w) => `<div class="issue warn">${esc(w)}</div>`).join('');
+  const kw = (r.keywords && r.keywords.related || []).length ? `<div class="tags">${r.keywords.related.map((k) => `<span class="tag">${esc(k)}</span>`).join('')}</div>` : '';
+  const qs = (r.keywords && r.keywords.questions || []).map((k) => `<div class="small" style="margin-top:4px">${esc(k)}</div>`).join('');
+  el.innerHTML = evCard('Quality checks', checks) +
+    evCard('Competitor pages read', sources) +
+    evCard('Facts the AI was allowed to use', factsHtml) +
+    (p.unique ? evCard('Your product knowledge', `<div class="small" style="white-space:pre-wrap">${esc(p.unique)}</div>`) : '') +
+    evCard('Kenya search data', kw + qs || '<span class="muted">None</span>') +
+    (p.current && p.current.description ? evCard('Current text on your site', `<div class="small muted" style="white-space:pre-wrap;max-height:180px;overflow:auto">${esc(p.current.description)}</div>`) : '');
 }
 function onField(t) {
   if (!S.rv || !S.rv.final) return;
@@ -240,6 +281,7 @@ function onField(t) {
   if (path === 'secondary_keywords') S.rv.final.secondary_keywords = v.split(',').map((x) => x.trim()).filter(Boolean); else setp(S.rv.final, path, v);
   if (path === 'seo_title') { $('#sn-t').textContent = v; const c = t.closest('label') || t.previousElementSibling; if (c) { const e = $('[data-cnt]', c); if (e) { e.textContent = `${v.length}/60`; e.classList.toggle('over', v.length > 60); } } }
   if (path === 'meta_description') { $('#sn-m').textContent = v; const c = t.previousElementSibling; const e = c && $('[data-cnt]', c); if (e) { e.textContent = `${v.length}/155`; e.classList.toggle('over', v.length > 155); } }
+  if (path === 'alt_text') { const im = $('.pvimg'); if (im) im.alt = v; }
   S.rv.saved = false; const ss = $('#savestate'); if (ss) ss.textContent = 'Unsaved changes…';
   paintPreview(); clearTimeout(S.rv.timer); S.rv.timer = setTimeout(() => flushSave().catch((e) => toast(e.message, true)), 1200);
 }
@@ -401,6 +443,17 @@ const ACTS = {
   regenToggle: () => { S.rv.regen = !S.rv.regen; paintEditor(); },
   regen: guard(async () => { await post(`/products/${S.rv.id}/regenerate`, { feedback: $('#fb').value, refresh: $('#fbr').checked }); S.rv.p.status = 'working'; S.rv.p.stage = 'Rewriting'; S.rv.regen = false; S.rv.saved = true; paintEditor(); toast('Rewriting with your notes'); }),
   approve: (a) => approve(+a.dataset.go),
+  approveAll: guard(async () => {
+    await flushSave();
+    const r = await post('/approve-all');
+    toast(`${r.approved} approved${r.skipped ? `, ${r.skipped} skipped (nothing written yet)` : ''}. Edit any of them under Approved.`);
+    S.rvTab = 'approved'; S.rv = null; await load();
+  }),
+  togglePane: (a) => {
+    const k = a.dataset.v; S.panes[k] = !S.panes[k]; savePanes();
+    const g = $('#rvgrid'); if (g) g.classList.toggle(k + '-off', !!S.panes[k]);
+    a.setAttribute('aria-expanded', String(!S.panes[k]));
+  },
   publish: guard(async () => { const r = await post(`/products/${S.rv.id}/publish`); toast('Published: ' + r.url); }),
   ingest: guard(async () => { $('#st-msg').innerHTML = '<span class="spin"></span>Reading pages and learning the pattern…'; try { await post('/profiles/ingest', { name: $('#st-name').value, urls: $('#st-urls').value.split('\n') }); await load(); toast('Style learned'); } catch (e) { $('#st-msg').textContent = ''; throw e; } }),
   setDefault: guard(async (a) => { await api('/settings', { method: 'PUT', body: { defaultProfileId: a.dataset.id } }); await load(); }),
@@ -449,6 +502,8 @@ document.addEventListener('click', (e) => { const a = e.target.closest('[data-ac
 document.addEventListener('change', (e) => { const a = e.target; if (a.type === 'checkbox' && a.dataset.act && ACTS[a.dataset.act]) ACTS[a.dataset.act](a, e);
   if (a.dataset.kn !== undefined) guard(() => api('/knowledge', { method: 'PUT', body: { key: a.dataset.kn, text: a.value } }).then(() => { S.knowledge[a.dataset.kn] = a.value; toast('Saved'); }))(); });
 document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.f) onField(e.target); });
+// <details> "toggle" does not bubble, so listen in the capture phase to remember which source cards are open
+document.addEventListener('toggle', (e) => { const d = e.target; if (d.dataset && d.dataset.evk !== undefined) { (S.panes.open = S.panes.open || {})[d.dataset.evk] = d.open; savePanes(); } }, true);
 window.addEventListener('beforeunload', (e) => { if (S.rv && !S.rv.saved) e.preventDefault(); });
 
 load().then(connect).catch((e) => { main.innerHTML = `<div class="empty">Could not reach the engine: ${esc(e.message)}</div>`; });

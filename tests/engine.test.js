@@ -126,3 +126,21 @@ test('preferred site with no catalogue is searched via its own search box; Googl
   assert.ok(!queries.some((q) => q.startsWith('site:shop.co.ke')));
   assert.ok(store.db.searchTemplates['shop.co.ke'].includes('/search?q='), 'working search template remembered');
 });
+
+test('approveAll approves everything waiting in review, including failed checks, and publishes nothing', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eng-'));
+  const store = new Store(path.join(dir, 'store.json')); store.db.profiles.default = DEFAULT_PROFILE;
+  const eng = createEngine(store);
+  const failing = eng.newProduct({ name: 'A', status: 'review', final: DRAFT, qa: { pass: false, issues: [{ level: 'error', msg: 'x' }], stats: {} } });
+  const passing = eng.newProduct({ name: 'B', status: 'review', final: DRAFT, qa: { pass: true, issues: [], stats: {} } });
+  const noCopy = eng.newProduct({ name: 'C', status: 'review' });
+  const working = eng.newProduct({ name: 'D', status: 'working', final: DRAFT });
+  const done = eng.newProduct({ name: 'E', status: 'published', final: DRAFT });
+  assert.deepEqual(eng.approveAll(), { approved: 2, skipped: 1 });
+  assert.equal(failing.status, 'approved');
+  assert.equal(passing.status, 'approved');
+  assert.equal(noCopy.status, 'review', 'nothing to approve without copy');
+  assert.equal(working.status, 'working');
+  assert.equal(done.status, 'published');
+  assert.deepEqual(eng.approveAll(), { approved: 0, skipped: 1 }, 'safe to click twice');
+});
