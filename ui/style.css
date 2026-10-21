@@ -108,7 +108,7 @@ main.wide{padding:14px 16px;height:100vh;display:flex;flex-direction:column;over
 .rlist button:hover{background:var(--soft)}
 .rlist button[aria-current=true]{background:var(--blue-bg);box-shadow:inset 3px 0 var(--blue)}
 .rlist .nm{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--green)} .dot.bad{background:var(--red)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--green)} .dot.bad{background:var(--red)} .dot.mid{background:var(--amber)}
 .editor{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;min-height:100%}
 .editor .top{display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:sticky;top:0;background:var(--panel);margin:-18px -18px 8px;padding:12px 18px;border-bottom:1px solid var(--line);z-index:2}
 .editor textarea,.editor input[type=text]{font-family:var(--serif);font-size:15px}
@@ -135,3 +135,13 @@ main.wide{padding:14px 16px;height:100vh;display:flex;flex-direction:column;over
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
 @media (max-width:1180px){main.wide{height:auto;overflow:visible}.review{grid-template-columns:1fr 1fr;flex:none}.pane-rl{grid-column:1/-1;max-height:240px}.pane-ev{grid-column:1/-1}.pane-ed,.pane-pv{height:80vh}}
 @media (max-width:760px){body{grid-template-columns:1fr}#nav{position:static;height:auto;flex-direction:row;flex-wrap:wrap}.review{grid-template-columns:1fr}.pane-ed,.pane-pv{height:auto}}
+
+/* confidence pills and AI notes */
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:6px;vertical-align:middle;white-space:nowrap}
+.pill.high{background:var(--green-bg);color:var(--green)} .pill.medium,.pill.unrated{background:var(--amber-bg);color:#6d4308} .pill.low{background:var(--red-bg);color:#7d1f15}
+.pill.done{background:var(--soft);color:var(--mute);text-decoration:line-through} .pill.big{font-size:12px;padding:3px 10px;margin:0}
+.nrow{border:1px solid var(--line);border-left-width:4px;border-radius:6px;padding:7px 9px;margin-bottom:6px;background:#fff}
+.nrow.low{border-left-color:var(--red)} .nrow.medium,.nrow.unrated{border-left-color:var(--amber)} .nrow.high{border-left-color:var(--green)} .nrow.done{opacity:.55}
+.nrow .pill{margin-left:0}
+.note{margin-top:4px;line-height:1.4} .note.photo{color:#7d1f15} .note.check{color:#6d4308}
+.thumb{display:block;width:100%;max-height:140px;object-fit:contain;background:var(--soft);border:1px solid var(--line);border-radius:6px;margin-bottom:8px}

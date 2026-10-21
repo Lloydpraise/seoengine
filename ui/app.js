@@ -87,6 +87,7 @@ function renderBar() {
   const q = S.queue || {};
   el.innerHTML = `<button class="btn" data-act="queueSel" ${S.sel.size ? '' : 'disabled'}>Queue selected (${S.sel.size})</button>
   <button class="btn" data-act="queueNew">Queue all new</button>
+  <button class="btn" data-act="redoPub" title="Runs published items through the photo-first pipeline again. Your live site is not changed until you publish the new copy.">Redo published items${S.sel.size ? ' (selected)' : ''}</button>
   <button class="btn danger" data-act="delSel" ${S.sel.size ? '' : 'disabled'}>Delete selected</button>
   <span style="flex:1"></span>
   <span class="muted small"><span class="pulse ${q.active ? '' : 'off'}"></span>${q.active ? 'AI is working' : 'AI is paused'} · ${q.running || 0} running, ${q.waiting || 0} waiting</span>
@@ -199,7 +200,7 @@ function renderReviewList() {
   paintApproveAll();
   const el = $('#rl'); if (!el) return;
   const list = reviewable();
-  el.innerHTML = list.length ? list.map((p) => `<button data-act="openRv" data-id="${p.id}" ${S.rv && S.rv.id === p.id ? 'aria-current="true"' : ''}><span class="nm">${p.status === 'working' ? '<span class="spin"></span>' : `<span class="dot ${p.qaPass === false ? 'bad' : ''}"></span>`}${esc(p.name)}</span><span class="small muted">${p.status === 'published' ? 'Published' : p.status === 'approved' ? 'Approved' : p.qaErrors ? p.qaErrors + ' check(s) failed' : 'Checks passed'}</span></button>`).join('') : '<div class="small muted" style="padding:12px">Empty</div>';
+  el.innerHTML = list.length ? list.map((p) => `<button data-act="openRv" data-id="${p.id}" ${S.rv && S.rv.id === p.id ? 'aria-current="true"' : ''}><span class="nm">${p.status === 'working' ? '<span class="spin"></span>' : `<span class="dot ${p.qaPass === false || p.photoFlags || p.confidence === 'low' ? 'bad' : p.confidence === 'medium' || p.confidence === 'unrated' ? 'mid' : ''}"></span>`}${esc(p.name)}</span><span class="small muted">${p.status === 'published' ? 'Published' : p.status === 'approved' ? 'Approved' : [p.photoFlags ? 'photo mismatch' : '', p.needsYou ? p.needsYou + ' for you to check' : '', p.qaErrors ? p.qaErrors + ' check(s) failed' : ''].filter(Boolean).join(' · ') || 'Checks passed'}</span></button>`).join('') : '<div class="small muted" style="padding:12px">Empty</div>';
 }
 const openReview = guard(async (id) => {
   await flushSave();
@@ -209,6 +210,10 @@ const openReview = guard(async (id) => {
 });
 const get = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
 const setp = (o, path, v) => { const ks = path.split('.'); const last = ks.pop(); ks.reduce((a, k) => a[k], o)[last] = v; };
+const CONF = { low: 'Not sure', unrated: 'Not rated', medium: 'Fairly sure', high: 'Confident' };
+const revItem = (key) => { const r = S.rv && S.rv.p.review; return r && r.items.find((i) => i.key === key); };
+// small pill beside a section label: how sure the AI was, and a tick once the owner has checked it
+const pill = (key) => { const it = revItem(key); return it ? `<span class="pill ${it.confidence}${it.checked ? ' done' : ''}" title="${esc(it.notes.map((n) => n.text).join(' | '))}">${it.checked ? 'Checked' : CONF[it.confidence]}</span>` : ''; };
 const cnt = (v, max) => `<span class="cnt ${v.length > max ? 'over' : ''}" data-cnt>${v.length}/${max}</span>`;
 const inp = (path, val, ph = '') => `<input type="text" data-f="${path}" value="${esc(val)}" placeholder="${esc(ph)}">`;
 
@@ -230,12 +235,12 @@ function paintEditor() {
     <label>Meta description ${cnt(f.meta_description, 155)}</label><textarea data-f="meta_description" style="min-height:88px">${esc(f.meta_description)}</textarea>
     <div class="snippet" aria-label="Google result preview"><div class="u">${esc(url)}</div><div class="t" id="sn-t">${esc(f.seo_title)}</div><div class="m" id="sn-m">${esc(f.meta_description)}</div></div>
     <label>H1</label>${inp('h1', f.h1)}
-    <label>Intro</label><textarea data-f="short_description" style="min-height:80px">${esc(f.short_description)}</textarea>
-    <label>Sections</label>${f.sections.map((s, i) => `<div class="block">${inp(`sections.${i}.heading`, s.heading, 'Heading')}<textarea class="body" data-f="sections.${i}.body" style="margin-top:6px">${esc(s.body)}</textarea><div class="row end"><button class="btn danger" data-act="delRow" data-k="sections" data-i="${i}">Remove section</button></div></div>`).join('')}
+    <label>Intro ${pill('short_description')}</label><textarea data-f="short_description" style="min-height:80px">${esc(f.short_description)}</textarea>
+    <label>Sections</label>${f.sections.map((s, i) => `<div class="block">${pill('section:' + i)}${inp(`sections.${i}.heading`, s.heading, 'Heading')}<textarea class="body" data-f="sections.${i}.body" style="margin-top:6px">${esc(s.body)}</textarea><div class="row end"><button class="btn danger" data-act="delRow" data-k="sections" data-i="${i}">Remove section</button></div></div>`).join('')}
     <button class="btn" data-act="addRow" data-k="sections" style="margin-top:8px">Add section</button>
-    <label>Specifications</label>${f.specs.map((s, i) => `<div class="row" style="margin-bottom:4px"><div style="flex:1">${inp(`specs.${i}.label`, s.label)}</div><div style="flex:1">${inp(`specs.${i}.value`, s.value)}</div><button class="btn danger" data-act="delRow" data-k="specs" data-i="${i}" aria-label="Remove spec">Remove</button></div>`).join('')}
+    <label>Specifications ${pill('specs')} ${pill('dimensions')}</label>${f.specs.map((s, i) => `<div class="row" style="margin-bottom:4px"><div style="flex:1">${inp(`specs.${i}.label`, s.label)}</div><div style="flex:1">${inp(`specs.${i}.value`, s.value)}</div><button class="btn danger" data-act="delRow" data-k="specs" data-i="${i}" aria-label="Remove spec">Remove</button></div>`).join('')}
     <button class="btn" data-act="addRow" data-k="specs">Add spec</button>
-    <label>FAQs</label>${f.faqs.map((s, i) => `<div class="block">${inp(`faqs.${i}.q`, s.q, 'Question')}<textarea data-f="faqs.${i}.a" style="margin-top:6px;min-height:64px">${esc(s.a)}</textarea><div class="row end"><button class="btn danger" data-act="delRow" data-k="faqs" data-i="${i}">Remove FAQ</button></div></div>`).join('')}
+    <label>FAQs ${pill('faqs')}</label>${f.faqs.map((s, i) => `<div class="block">${inp(`faqs.${i}.q`, s.q, 'Question')}<textarea data-f="faqs.${i}.a" style="margin-top:6px;min-height:64px">${esc(s.a)}</textarea><div class="row end"><button class="btn danger" data-act="delRow" data-k="faqs" data-i="${i}">Remove FAQ</button></div></div>`).join('')}
     <button class="btn" data-act="addRow" data-k="faqs" style="margin-top:8px">Add FAQ</button>
     <label>Image alt text</label>${inp('alt_text', f.alt_text)}</div>`;
   paintPreviewPane();
@@ -247,7 +252,7 @@ function paintPreviewPane() {
   const { p, final: f } = S.rv;
   if (p.status === 'working' || !f) { el.innerHTML = ''; return; }
   const img = p.imageUrl || (p.localImage ? '/images/' + encodeURIComponent(p.localImage) : '');
-  el.innerHTML = `<div class="pvpane"><div class="pvhead">Preview</div>${img ? `<img class="pvimg" src="${esc(img)}" alt="${esc(f.alt_text || p.name)}">` : '<div class="pvimg none">No image</div>'}<div class="pvurl">${esc(prodUrl(p))}</div><div class="pv" id="pv"></div></div>`;
+  el.innerHTML = `<div class="pvpane"><div class="pvhead">Preview${['published', 'approved'].includes(p.status) ? ' <button class="btn" data-act="redoOne" style="float:right;margin-top:-4px">Redo this item</button>' : ''}</div>${img ? `<img class="pvimg" src="${esc(img)}" alt="${esc(f.alt_text || p.name)}">` : '<div class="pvimg none">No image</div>'}<div class="pvurl">${esc(prodUrl(p))}</div><div class="pv" id="pv"></div></div>`;
   paintPreview();
 }
 function paintPreview() {
@@ -256,19 +261,54 @@ function paintPreview() {
   el.innerHTML = `<h1 style="font-family:var(--sans)">${esc(f.h1)}</h1>${P(f.short_description)}${f.sections.map((s) => `<h2>${esc(s.heading)}</h2>${P(s.body)}`).join('')}${f.specs.length ? `<h2>Specifications</h2><table><tbody>${f.specs.map((x) => `<tr><th>${esc(x.label)}</th><td>${esc(x.value)}</td></tr>`).join('')}</tbody></table>` : ''}${f.faqs.length ? `<h2>Frequently asked questions</h2>${f.faqs.map((x) => `<h3>${esc(x.q)}</h3><p>${esc(x.a)}</p>`).join('')}` : ''}`;
 }
 // Each card is collapsible; open/closed state is remembered between products and reloads.
-const EV_DEFAULT_OPEN = { 'Quality checks': true, 'Competitor pages read': true };
+const EV_DEFAULT_OPEN = { 'AI notes & confidence': true, 'Photo check': true, 'Quality checks': true, 'Competitor pages read': true };
 const evCard = (title, body) => {
   const saved = S.panes.open && title in S.panes.open ? S.panes.open[title] : !!EV_DEFAULT_OPEN[title];
   return `<details class="card evc" data-evk="${esc(title)}" ${saved ? 'open' : ''}><summary>${esc(title)}</summary><div class="evb">${body}</div></details>`;
 };
+function aiNotesHtml(p) {
+  const r = p.review;
+  if (!r) return '<span class="muted">No AI notes for this product yet.</span>';
+  const w = p.wrote || {};
+  const head = `<div class="row" style="margin-bottom:8px"><span class="pill big ${r.overall}">${CONF[r.overall]} overall</span><span class="small muted">${r.needsYou ? `${r.needsYou} part${r.needsYou === 1 ? '' : 's'} for you to check` : 'Nothing left for you to check'}</span></div>`
+    + (w.hadPhoto && !w.sawPhoto ? '<div class="issue warn">The writing AI could not see the photo (the writing model does not take images). The photo check below still ran.</div>' : '')
+    + (!w.hadPhoto && w.hadPhoto !== undefined ? '<div class="issue error">There was no photo, so the AI wrote blind. Check everything.</div>' : '');
+  const rows = r.items.map((i) => `<div class="nrow ${i.confidence}${i.checked ? ' done' : ''}"><div class="row" style="gap:6px"><span class="pill ${i.confidence}">${CONF[i.confidence]}</span><b style="flex:1">${esc(i.title)}</b><label class="small" style="margin:0;font-weight:400"><input type="checkbox" data-act="checkItem" data-key="${esc(i.key)}" ${i.checked ? 'checked' : ''}> checked</label></div>${i.notes.map((n) => `<div class="small note ${n.from}">${n.from === 'ai' ? 'AI: ' : n.from === 'photo' ? 'Photo: ' : 'Check: '}${esc(n.text)}</div>`).join('') || (i.confidence === 'high' ? '' : '<div class="small muted">No note given</div>')}</div>`).join('');
+  const qs = (r.owner_questions || []).length ? `<div class="small" style="margin-top:8px"><b>Only you can confirm:</b>${r.owner_questions.map((q) => `<div>${esc(q)}</div>`).join('')}</div>` : '';
+  return head + rows + qs;
+}
+function photoHtml(p) {
+  const v = p.vqa, look = p.visual;
+  const img = p.imageUrl || (p.localImage ? '/images/' + encodeURIComponent(p.localImage) : '');
+  const seen = look && look.seen ? `<div class="small" style="margin-bottom:8px"><b>What the AI saw in your photo:</b> ${esc(look.seen.product_type)}${look.seen.visible_features.length ? '<br>' + esc(look.seen.visible_features.join(' · ')) : ''}${look.seen.not_visible.length ? `<br><span class="muted">Cannot tell from a photo: ${esc(look.seen.not_visible.join(', '))}</span>` : ''}</div>` : '';
+  let body;
+  if (!v) body = '<span class="muted">Not checked against the photo yet.</span>';
+  else {
+    const iss = (v.checked ? photoIssues(v) : [{ level: 'warn', msg: v.reason || 'Not checked' }]);
+    body = (iss.length ? iss.map((i) => `<div class="issue ${i.level}">${esc(i.msg)}</div>`).join('') : '<div class="okbox">Photo matches the copy</div>') + (v.summary ? `<div class="small muted" style="margin-top:4px">${esc(v.summary)}</div>` : '');
+  }
+  return `${img ? `<img src="${esc(img)}" alt="" class="thumb">` : ''}${seen}${body}<div class="row" style="margin-top:8px"><button class="btn" data-act="photoCheck">Re-check against photo</button><span class="small muted">Run after you edit</span></div>`;
+}
+// same wording as the server (lib/vision.js visionIssues)
+function photoIssues(vq) {
+  const out = [];
+  if (vq.image_matches_copy === 'no') out.push({ level: 'error', msg: 'The photo does not look like the product this copy describes' });
+  else if (vq.image_matches_copy === 'cannot_tell') out.push({ level: 'warn', msg: 'The photo is too unclear to confirm the copy. Check it yourself' });
+  if (vq.name_vs_image.verdict === 'conflicts') out.push({ level: 'error', msg: `The product name and the photo disagree: ${vq.name_vs_image.reason}` });
+  vq.contradictions.forEach((c) => out.push({ level: c.severity === 'medium' ? 'warn' : 'error', msg: `${c.where || 'Copy'}: says "${c.claim}" but the photo shows ${c.image_shows || 'something different'}` }));
+  vq.unconfirmed.forEach((c) => out.push({ level: 'warn', msg: `${c.where || 'Copy'}: "${c.claim}" cannot be confirmed from the photo${c.why ? ` (${c.why})` : ''}` }));
+  return out;
+}
 function paintEvidence() {
   const el = $('#ev'); if (!el || !S.rv) return; const { p } = S.rv; const q = p.qa; const r = p.research || {}; const facts = (p.facts && p.facts.facts) || [];
   const checks = q ? (q.issues.length ? q.issues.map((i) => `<div class="issue ${i.level}">${esc(i.msg)}</div>`).join('') : '<div class="okbox">All checks passed</div>') + `<div class="small muted" style="margin-top:6px">${q.stats.words} words · wording overlap ${Math.round(q.stats.overlap * 100)}% · similarity to your other pages ${Math.round(q.stats.duplicate * 100)}%</div>` : '<span class="muted">Not checked yet</span>';
   const factsHtml = (facts.length ? facts.map((f) => `<div class="fact"><span><b>${esc(f.label)}:</b> ${esc(f.value)}</span><span class="${f.confidence === 'low' ? 'lo' : 'muted'}">${esc(f.confidence)}</span><span class="small muted" style="grid-column:1/-1">${esc((f.hosts || []).join(', '))}</span></div>`).join('') : '<span class="muted">None found. The copy relies on your notes.</span>') + (p.facts && p.facts.variant_warning ? `<div class="issue warn" style="margin-top:6px">${esc(p.facts.variant_warning)}</div>` : '') + ((p.facts && p.facts.conflicts) || []).map((c) => `<div class="issue warn" style="margin-top:6px">Sources disagree on ${esc(c.label)}: ${esc((c.values || []).join(' vs '))}</div>`).join('');
-  const sources = ((r.sources || []).map((s) => `<div class="small" style="margin-bottom:6px"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.host)}</a><br><span class="muted">${s.words} words · ${s.faqs} FAQs · ${s.specs} specs · ${Math.round((s.fit || 0) * 100)}% match</span>${s.structureOnly ? '<br><span class="lo">Different size or model: used for structure only</span>' : ''}</div>`).join('') || '<span class="muted">None</span>') + (r.warnings || []).map((w) => `<div class="issue warn">${esc(w)}</div>`).join('');
+  const sources = ((r.sources || []).map((s) => `<div class="small" style="margin-bottom:6px"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.host)}</a><br><span class="muted">${s.words} words · ${s.faqs} FAQs · ${s.specs} specs · ${Math.round((s.fit || 0) * 100)}% match</span>${s.photo === 'different' ? '<br><span class="lo">Its photo shows a different product</span>' : s.photo === 'similar' ? '<br><span class="lo">Its photo looks similar, not identical</span>' : s.photo === 'same' ? '<br><span class="muted">Its photo matches yours</span>' : ''}${s.structureOnly ? '<br><span class="lo">Different size or model: used for structure only</span>' : ''}</div>`).join('') || '<span class="muted">None</span>') + (r.warnings || []).map((w) => `<div class="issue warn">${esc(w)}</div>`).join('');
   const kw = (r.keywords && r.keywords.related || []).length ? `<div class="tags">${r.keywords.related.map((k) => `<span class="tag">${esc(k)}</span>`).join('')}</div>` : '';
   const qs = (r.keywords && r.keywords.questions || []).map((k) => `<div class="small" style="margin-top:4px">${esc(k)}</div>`).join('');
-  el.innerHTML = evCard('Quality checks', checks) +
+  el.innerHTML = evCard('AI notes & confidence', aiNotesHtml(p)) +
+    evCard('Photo check', photoHtml(p)) +
+    evCard('Quality checks', checks) +
     evCard('Competitor pages read', sources) +
     evCard('Facts the AI was allowed to use', factsHtml) +
     (p.unique ? evCard('Your product knowledge', `<div class="small" style="white-space:pre-wrap">${esc(p.unique)}</div>`) : '') +
@@ -289,7 +329,7 @@ async function flushSave() {
   const rv = S.rv; if (!rv || rv.saved || !rv.final) return;
   clearTimeout(rv.timer); rv.saved = true;
   const r = await post(`/products/${rv.id}/final`, { final: rv.final });
-  rv.p.qa = r.qa; rv.p.final = rv.final;
+  rv.p.qa = r.qa; rv.p.final = rv.final; if (r.review) rv.p.review = r.review;
   const ss = $('#savestate'); if (ss) ss.textContent = 'Saved';
   if (S.rv === rv) paintEvidence();
 }
@@ -440,6 +480,10 @@ const ACTS = {
   openRv: (a) => openReview(a.dataset.id),
   addRow: (a) => { if (!S.rv || !S.rv.final) return; S.rv.final[a.dataset.k].push({ ...BLANK[a.dataset.k] }); S.rv.saved = false; paintEditor(); },
   delRow: (a) => { S.rv.final[a.dataset.k].splice(+a.dataset.i, 1); S.rv.saved = false; paintEditor(); clearTimeout(S.rv.timer); S.rv.timer = setTimeout(() => flushSave().catch((e) => toast(e.message, true)), 800); },
+  checkItem: guard(async (a) => { const r = await post(`/products/${S.rv.id}/review-item`, { key: a.dataset.key, checked: a.checked }); S.rv.p.review = r.review; paintEvidence(); const f = $('#ed'); if (f) { const sv = S.rv.saved; paintEditor(); S.rv.saved = sv; } }),
+  photoCheck: guard(async () => { toast('Checking against the photo…'); await flushSave(); const r = await post(`/products/${S.rv.id}/photo-check`); S.rv.p.vqa = r.vqa; S.rv.p.review = r.review; paintEvidence(); paintEditor(); toast('Photo check done'); }),
+  redoOne: guard(async () => { if (!confirm('Redo this item? It goes back through the AI and lands in To review. Your live page stays as it is until you publish the new copy.')) return; await flushSave(); await post(`/products/${S.rv.id}/redo`); toast('Queued for redo'); S.rv = null; await load(); viewReview(); }),
+  redoPub: guard(async () => { const ids = [...S.sel].filter((id) => (S.products.find((p) => p.id === id) || {}).status === 'published'); const n = ids.length || S.products.filter((p) => p.status === 'published').length; if (!n) return toast('No published items to redo', true); if (!confirm(`Redo ${n} published item${n === 1 ? '' : 's'}? Each goes back through the AI into To review. Your live pages stay as they are until you publish the new copy.`)) return; const r = await post('/redo-published', { ids }); toast(`${r.queued} queued for redo`); await load(); }),
   regenToggle: () => { S.rv.regen = !S.rv.regen; paintEditor(); },
   regen: guard(async () => { await post(`/products/${S.rv.id}/regenerate`, { feedback: $('#fb').value, refresh: $('#fbr').checked }); S.rv.p.status = 'working'; S.rv.p.stage = 'Rewriting'; S.rv.regen = false; S.rv.saved = true; paintEditor(); toast('Rewriting with your notes'); }),
   approve: (a) => approve(+a.dataset.go),

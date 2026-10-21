@@ -15,6 +15,16 @@ Tests: `npm test`
 Existing products (imported from Supabase) are updated in place: only description, meta_title, meta_description, alt_text and categories change. Name, slug, price, image stay.
 New products are inserted (same columns your old pipeline used).
 
+## Photo first: bad data is the cause of bad SEO
+Two things are the sources of truth: **the product photo** and **the name the admin typed on /admin**. Before every run the engine re-reads both from your live site, so a rename or a new photo is never missed.
+1. **Look first** (during research): the AI looks at your photo next to each competitor page's main image. A competitor page whose picture shows a different product is never used for facts (structure only), however well its name matched. If the admin name and the photo disagree, that is flagged instead of guessed.
+2. **Write with eyes open**: the writer gets the photo and a description of what is visible, plus a rule that photo + name outrank every other fact. If the writing model cannot take images it falls back to text and the review says so.
+3. **Rate itself**: the writer rates every section, the specs, the dimensions/capacity/power and the FAQs (confident / fairly sure / not sure) with a note on what it doubts, and lists questions only you can answer.
+4. **Not trusted on its own word**: in code, every number in the copy is checked against the facts, your notes and the name. An unsupported dimension is forced to "not sure" even if the AI said it was confident, and a part the AI forgot to rate shows as "not rated".
+5. **QA AI goes last**: a separate AI sees only the photo, the admin name and the finished copy and lists anything the photo contradicts (burner or door counts, finish, type) or cannot confirm. A contradiction triggers one rewrite, then it checks again. It does not judge dimensions (a photo cannot show them), which is why step 4 exists.
+6. **Review**: the first card in Sources & checks is **AI notes & confidence**, worst items first, each with a "checked" tick for you. Under it is **Photo check** (with a re-check button for after you edit). Small pills beside Intro, each section, Specifications and FAQs show the same ratings in the editor. The review list shows "N for you to check" and "photo mismatch".
+Settings: `visionModel`, `qaModel`, `writerSeesPhoto`. The notes are stored beside the copy, never inside it, so they are never published. Fine-tune exports include the AI notes so a tuned model keeps writing them.
+
 ## Choosing competitor pages (not just "whoever ranks first")
 - **Sources per product** (Settings, 1-4, default 3).
 - **Preferred sites** (Settings): tried first, in your order. One extra Google search per site per product.

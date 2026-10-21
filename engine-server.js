@@ -71,7 +71,7 @@ app.get('/api/events', (req, res) => {
 });
 
 // ---------- products ----------
-app.get('/api/products/:id', wrap((req) => getP(req)));
+app.get('/api/products/:id', wrap((req) => { const p = getP(req); if (p.final && !p.review) p.review = engine.remerge(p, p.final); return p; }));
 
 app.post('/api/products', wrap((req) => {
   const b = req.body;
@@ -140,11 +140,15 @@ app.post('/api/products/:id/find-sources', wrap(async (req) => {
 }));
 
 // ---------- queue ----------
+app.post('/api/products/:id/redo', wrap((req) => { getP(req); const n = engine.redo([req.params.id]); if (!n) throw new Error('Only published or approved products can be redone'); engine.start(); return { queued: n }; }));
+app.post('/api/redo-published', wrap((req) => { const ids = Array.isArray(req.body.ids) && req.body.ids.length ? req.body.ids : engine.redoable(); const n = engine.redo(ids); if (n) engine.start(); return { queued: n }; }));
 app.post('/api/queue/start', wrap(() => { engine.start(); return engine.qstats(); }));
 app.post('/api/queue/pause', wrap(() => { engine.pause(); return engine.qstats(); }));
 
 // ---------- review ----------
-app.post('/api/products/:id/final', wrap(async (req) => { const p = getP(req); await engine.setFinal(p, req.body.final); return { qa: p.qa }; }));
+app.post('/api/products/:id/final', wrap(async (req) => { const p = getP(req); await engine.setFinal(p, req.body.final); return { qa: p.qa, review: p.review }; }));
+app.post('/api/products/:id/photo-check', wrap(async (req) => engine.photoCheck(getP(req).id)));
+app.post('/api/products/:id/review-item', wrap((req) => ({ review: engine.setReviewChecked(getP(req).id, String(req.body.key || ''), !!req.body.checked) })));
 app.post('/api/products/:id/regenerate', wrap((req) => { getP(req); engine.regenerate(req.params.id, req.body); return { started: true }; }));
 app.post('/api/products/:id/approve', wrap((req) => { const p = getP(req); if (!p.final) throw new Error('Nothing to approve'); engine.touch(p, { status: 'approved', stage: 'Approved' }); }));
 app.post('/api/approve-all', wrap(() => engine.approveAll()));
