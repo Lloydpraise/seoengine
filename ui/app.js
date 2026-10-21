@@ -435,7 +435,9 @@ function viewSettings() {
   main.innerHTML = `<h1>Settings</h1><div class="grid2"><div class="card"><h2>Site</h2>${t('siteName', 'Store name')}${t('siteUrl', 'Site URL')}<label>About the business (the AI reads this every time)</label><textarea data-set="siteContext" style="min-height:110px">${esc(s.siteContext)}</textarea>
   <label>Description format saved to your site</label><select data-set="descriptionFormat"><option value="text" ${s.descriptionFormat === 'text' ? 'selected' : ''}>Plain text (safe on any page)</option><option value="html" ${s.descriptionFormat === 'html' ? 'selected' : ''}>HTML with headings and a spec table (page must render HTML)</option></select>
   <label>Extra Supabase columns (optional, JSON)</label><textarea data-set="extraColumns" style="min-height:70px;font-family:monospace;font-size:12px" placeholder='{"h1":"h1","schema_jsonld":"jsonld"}'>${esc(Object.keys(s.extraColumns || {}).length ? JSON.stringify(s.extraColumns, null, 1) : '')}</textarea><p class="small muted">Left is a column in your products table. Right is one of h1, short_description, faqs_json, specs_json, jsonld, primary_keyword, tags. Only add columns that exist.</p></div>
-  <div class="card"><h2>AI</h2>${t('writerModel', 'Writing model', 'gpt-4o, or your ft:… model')}${t('extractModel', 'Research model (cheaper)', 'gpt-4o-mini')}<label>Products processed at once</label><input type="number" min="1" max="5" data-set="concurrency" value="${s.concurrency}">
+  <div class="card"><h2>AI</h2>${t('writerModel', 'Writing model', 'gpt-4.1-mini, or your ft:… model')}${t('extractModel', 'Research model', 'gpt-4.1-mini')}${t('visionModel', 'Photo look model (needs image input)', 'gpt-4.1-mini')}${t('qaModel', 'Photo QA model (needs image input)', 'gpt-4.1-mini')}
+  <label>Photo detail sent to the AI (look and writing)</label><select data-set="photoDetail">${['low', 'auto', 'high'].map((d) => `<option value="${d}" ${s.photoDetail === d ? 'selected' : ''}>${d}${d === 'low' ? ' (cheapest)' : d === 'high' ? ' (most tokens)' : ''}</option>`).join('')}</select>
+  <label>Photo detail for the QA check</label><select data-set="qaDetail">${['low', 'auto', 'high'].map((d) => `<option value="${d}" ${s.qaDetail === d ? 'selected' : ''}>${d}</option>`).join('')}</select><p class="small muted">Low is enough for matching a product to its photo. If the QA misses small things such as burner or door counts, set the QA check to high.</p><label>Products processed at once</label><input type="number" min="1" max="5" data-set="concurrency" value="${s.concurrency}">
   <label>Competitor pages to read per product (1 to 4)</label><input type="number" min="1" max="4" data-set="sourcesPerProduct" value="${s.sourcesPerProduct}">
   <label>Preferred competitor sites, tried first, in this order (one per line)</label><textarea data-set="preferredSites" style="min-height:70px" placeholder="jumia.co.ke&#10;kilimall.co.ke">${esc((s.preferredSites || []).join('\n'))}</textarea><p class="small muted">Preferred sites you have indexed cost nothing. Others are looked up with their own search box (free) and only fall back to one Google search each.</p>
   <label><input type="checkbox" data-set="siteSearch" ${s.siteSearch ? 'checked' : ''}> Look products up with each preferred site's own search box</label>
@@ -443,8 +445,21 @@ function viewSettings() {
   <label><input type="checkbox" data-set="autoFindSources" ${s.autoFindSources ? 'checked' : ''}> Find competitor pages automatically when none are given</label>
   <label>Default reference style</label><select data-set="defaultProfileId">${S.profiles.map((p) => `<option value="${p.id}" ${p.id === s.defaultProfileId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
   <div class="card"><h2>Categories (must match your site exactly)</h2><label>Major categories, one per line</label><textarea data-set="majorCategories" style="min-height:80px">${esc(s.majorCategories.join('\n'))}</textarea><label>Sub categories, one per line</label><textarea data-set="subCategories" style="min-height:160px">${esc(s.subCategories.join('\n'))}</textarea></div></div>
+  <div class="card" id="usage-card" style="margin-top:14px"><h2>Token usage</h2><p class="small muted">Loading…</p></div>
   <button class="btn primary" data-act="saveSettings">Save settings</button>`;
+  loadUsage();
 }
+
+// Tokens used so far, per step. "Cached" is the part of the input that OpenAI charged at the cached rate: cached / input is the cache hit rate.
+const loadUsage = guard(async () => {
+  const u = await api('/usage'); const el = $('#usage-card'); if (!el) return;
+  const n = (x) => Number(x || 0).toLocaleString(), pct = (a, b) => (b ? Math.round((100 * a) / b) + '%' : '-');
+  const rows = Object.entries(u.byLabel || {}).sort((a, b) => b[1].prompt - a[1].prompt)
+    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${n(v.calls)}</td><td>${n(v.prompt)}</td><td>${pct(v.cached, v.prompt)}</td><td>${n(v.completion)}</td></tr>`).join('');
+  el.innerHTML = `<h2>Token usage</h2><p class="small muted">Since ${new Date(u.since).toLocaleString()}. ${n(u.calls)} calls, ${n(u.prompt)} input tokens (${pct(u.cached, u.prompt)} served from the cache), ${n(u.completion)} output tokens.</p>
+    ${rows ? `<table><thead><tr><th>Step</th><th>Calls</th><th>Input</th><th>Cached</th><th>Output</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="small muted">Nothing recorded yet. Run a few products.</p>'}
+    <div class="row" style="margin-top:10px"><button class="btn" data-act="resetUsage">Reset counters</button></div>`;
+});
 
 /* ---------- actions ---------- */
 const ACTS = {
@@ -537,6 +552,7 @@ const ACTS = {
     const r = await post('/csv/apply', { rows, queue: $('#csvq').checked, start: $('#csvs').checked });
     toast(`${r.updated} updated, ${r.created} created, ${r.skipped} skipped${r.queued ? `, ${r.queued} queued` : ''}`); S.csv = null; await load(); S.view = 'queue'; render();
   }),
+  resetUsage: guard(async () => { await api('/usage/reset', { method: 'POST' }); toast('Counters reset'); loadUsage(); }),
   saveSettings: guard(async () => {
     const body = {}; $$('[data-set]').forEach((el) => { body[el.dataset.set] = el.type === 'checkbox' ? el.checked : el.value; });
     await api('/settings', { method: 'PUT', body }); toast('Settings saved'); await load();

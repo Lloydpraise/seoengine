@@ -1,0 +1,708 @@
+diff --git a/CHANGES.md b/CHANGES.md
+new file mode 100644
+index 0000000..9f113c3
+--- /dev/null
++++ b/CHANGES.md
+@@ -0,0 +1,18 @@
++# seoengine: cost changes
++
++Unzip over the repo root, then `npm install` (adds the optional `sharp` for photo shrinking) and `npm test` (51 tests).
++
++| File | Change |
++|---|---|
++| `lib/settings.js` | all four models default to `gpt-4.1-mini`; new `photoDetail` / `qaDetail` (default `low`); old saved `gpt-4o` / `gpt-4o-mini` values move to the new default, `ft:` and custom models are kept |
++| `lib/ai.js` | records tokens + cached tokens per call (`onUsage`), sends `prompt_cache_key`, image detail defaults to `low`, retries without the key if the API rejects it |
++| `lib/engine.js` | prompt reordered (shared first, product last, feedback at the very end); cache key per profile + category; expand and quality-fix retries are text-only; photo detail from settings; per-step/per-product usage totals; queue runs same profile + category back to back |
++| `lib/vision.js` | photos shrunk to 768px JPEG before sending (optional `sharp`) |
++| `lib/kenya.js` | "Kenya" added after every Google keyword the researcher searches (never doubled); empty `site:` searches retry once without it; site search boxes unchanged |
++| `lib/profiles.js` | usage label for style learning |
++| `engine-server.js` | `GET /api/usage`, `POST /api/usage/reset`; validates the detail settings |
++| `ui/app.js` | Settings > AI: model fields for look and QA, detail selects; Token usage card |
++| `package.json`, `package-lock.json` | `sharp` as an optional dependency |
++| `tests/cost.test.js` | new: prompt prefix, Kenya keywords, text-only retries, detail settings, queue grouping, usage totals, cache-key fallback, settings migration, photo shrink |
++| `ENGINE.md` | "Cost controls" section |
++| `cost-changes.patch` | the same code changes as a `git apply` patch |
+diff --git a/ENGINE.md b/ENGINE.md
+index f2d2847..d72eb1e 100644
+--- a/ENGINE.md
++++ b/ENGINE.md
+@@ -67,3 +67,13 @@ Export > .jsonl is OpenAI chat fine-tune format: system + exact input + the vers
+ - `lib/` pipeline (engine, extract, qa, kenya, profiles, csvmatch, net, ai, store)
+ - `ui/` the interface
+ - `data/store.json` all engine data (back this up). `data/cache/` fetched pages.
++
++## Cost controls (tokens)
++- **One model for everything by default: `gpt-4.1-mini`** (research, photo look, writing, photo QA). Models you saved earlier as `gpt-4o` / `gpt-4o-mini` are treated as "not chosen" and move to the new default; `ft:...` ids and any other model you typed are kept. Settings > AI.
++- **Photo detail is `low`** (Settings > AI). The QA check has its own switch (`qaDetail`): set it to `high` if QA misses small things such as burner or door counts. Competitor photos are always `low`.
++- **The photo is sent 3 times per product, not 5**: look, first draft, QA. The length-expand and quality-fix retries are text-only. Only the photo-mismatch rewrite (QA found a contradiction) sends it again. Photos are shrunk to 768px first (needs the optional `sharp` package; `npm install` adds it).
++- **Prompt cache**: the writing prompt is ordered shared-first (rules, Kenya rules, JSON shape, style profile, length, category knowledge in the system message), then product-specific last. Calls carry a `prompt_cache_key` per style profile + category, and the queue runs waiting products of the same profile + category back to back.
++- **Token usage** is recorded for every call: Settings > Token usage (input, cached share, output per step), `GET /api/usage`, and one `[ai] ...` line per call in the console (`AI_USAGE_LOG=0` silences it).
++
++## "Kenya" on every Google keyword
++The researcher adds the word **Kenya** after every keyword it sends to Google (`price in Kenya`, `buy ... Nairobi Kenya`, `... specifications Kenya`, and the preferred-site `site:` searches). It is never doubled if the keyword already says Kenya. A `site:` search that comes back empty with Kenya added is repeated once without it, so a shop whose pages never say Kenya is not missed. The competitor sites' own search boxes and the catalogue matching are deliberately left alone: they need every word to appear in the product text, so an extra word would hide products. Lives in `withKenya()` in `lib/kenya.js`.
+diff --git a/engine-server.js b/engine-server.js
+index ae6c2fb..2d632b9 100644
+--- a/engine-server.js
++++ b/engine-server.js
+@@ -239,6 +239,7 @@ app.put('/api/settings', wrap((req) => {
+   for (const k of ['majorCategories', 'subCategories']) if (typeof out[k] === 'string') out[k] = out[k].split('\n').map((x) => x.trim()).filter(Boolean);
+   if (typeof out.preferredSites === 'string') out.preferredSites = out.preferredSites.split('\n').map((x) => x.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]).filter(Boolean);
+   if ('sourcesPerProduct' in out) out.sourcesPerProduct = Math.min(4, Math.max(1, +out.sourcesPerProduct || 3));
++  for (const k of ['photoDetail', 'qaDetail']) if (k in out && !['low', 'auto', 'high'].includes(out[k])) delete out[k];
+   if ('concurrency' in out) out.concurrency = Math.min(5, Math.max(1, +out.concurrency || 2));
+   store.db.settings = { ...store.db.settings, ...out };
+   net.setBrowser(getSettings(store).useBrowser);
+@@ -280,6 +281,8 @@ app.post('/api/csv/apply', wrap((req) => {
+ 
+ // ---------- export ----------
+ const statusesFrom = (q) => (q === 'all' ? ['review', 'approved', 'published'] : q === 'approved' ? ['approved', 'published'] : [q || 'approved']);
++app.get('/api/usage', wrap(() => engine.usage()));
++app.post('/api/usage/reset', wrap(() => { engine.resetUsage(); }));
+ app.get('/api/export.jsonl', (req, res) => {
+   res.set({ 'Content-Type': 'application/jsonl', 'Content-Disposition': 'attachment; filename="finetune.jsonl"' });
+   res.send(engine.toJsonl(engine.exportRows(statusesFrom(req.query.status))));
+diff --git a/lib/ai.js b/lib/ai.js
+index 15b9438..9f2deee 100644
+--- a/lib/ai.js
++++ b/lib/ai.js
+@@ -1,24 +1,48 @@
+ const OpenAI = require('openai');
+ let client;
+ const getClient = () => {
++  if (client) return client;
+   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is missing in .env');
+-  return client || (client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
++  return (client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+ };
+ 
++// Token usage: every call reports its usage to the listener (the engine adds it up per product and per step).
++// prompt_tokens includes cached_tokens, so cache hit rate = cached / prompt.
++let listener = null;
++const onUsage = (fn) => { listener = fn; };
++function report(meta, model, usage) {
++  if (!usage) return;
++  const u = {
++    label: meta.label || 'other', model, productId: meta.productId || '',
++    prompt: usage.prompt_tokens || 0,
++    cached: (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0,
++    completion: usage.completion_tokens || 0,
++  };
++  if (process.env.AI_USAGE_LOG !== '0') console.log(`[ai] ${u.label} ${model} in=${u.prompt} cached=${u.cached} out=${u.completion}${meta.images ? ` images=${meta.images}` : ''}`);
++  try { if (listener) listener(u); } catch { /* usage tracking must never break a run */ }
++}
++
+ // JSON-mode call with retry on rate limits / transient errors.
+ // images: optional [{ url, detail }] (url may be a data: URL). Sent as vision input alongside the text.
+-async function jsonCall({ model, system, user, images }) {
+-  let lastErr;
++// cacheKey: groups calls that share the same long prefix (OpenAI prompt_cache_key) so they land on the same cache.
++// label / productId: only for usage tracking.
++async function jsonCall({ model, system, user, images, cacheKey, label, productId }) {
++  let lastErr, useKey = !!cacheKey;
+   for (let attempt = 0; attempt < 5; attempt++) {
+     try {
+-      const r = await getClient().chat.completions.create({
++      const body = {
+         model,
+-        messages: [{ role: 'system', content: system }, { role: 'user', content: images && images.length ? [{ type: 'text', text: user }, ...images.map((i) => ({ type: 'image_url', image_url: { url: i.url, detail: i.detail || 'auto' } }))] : user }],
++        messages: [{ role: 'system', content: system }, { role: 'user', content: images && images.length ? [{ type: 'text', text: user }, ...images.map((i) => ({ type: 'image_url', image_url: { url: i.url, detail: i.detail || 'low' } }))] : user }],
+         response_format: { type: 'json_object' },
+-      });
++      };
++      if (useKey) body.prompt_cache_key = String(cacheKey).slice(0, 64);
++      const r = await getClient().chat.completions.create(body);
++      report({ label, productId, images: images && images.length }, model, r.usage);
+       return JSON.parse(r.choices[0].message.content);
+     } catch (e) {
+       lastErr = e;
++      // an older API/SDK that does not know prompt_cache_key: carry on without it
++      if (useKey && e.status === 400 && /prompt_cache_key/i.test(String(e.message))) { useKey = false; attempt--; continue; }
+       const retryable = e.status === 429 || e.status >= 500 || e instanceof SyntaxError;
+       if (!retryable) break;
+       await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
+@@ -26,4 +50,5 @@ async function jsonCall({ model, system, user, images }) {
+   }
+   throw new Error(`OpenAI call failed: ${lastErr && lastErr.message}`);
+ }
+-module.exports = { jsonCall };
++const _setClient = (c) => { client = c; }; // tests only
++module.exports = { jsonCall, onUsage, _setClient };
+diff --git a/lib/engine.js b/lib/engine.js
+index f43f8cd..a118313 100644
+--- a/lib/engine.js
++++ b/lib/engine.js
+@@ -105,7 +105,7 @@ function createEngine(store, deps = {}) {
+     const matches = await net.serperLens(p.imageUrl);
+     if (!matches.length) throw new Error('Google Lens found no matches. Type the product name in the product panel, then queue it again.');
+     const id = await ai.jsonCall({
+-      model: s.extractModel,
++      model: s.extractModel, label: 'identify', productId: p.id,
+       system: 'You identify commercial kitchen products from reverse-image-search titles. JSON only.',
+       user: `Titles of visually similar products:\n${matches.map((m) => '- ' + m.title).join('\n')}
+ 
+@@ -284,7 +284,7 @@ ${pg.bullets.slice(0, 25).join('\n') || '(none)'}
+ Text:
+ ${pg.text.slice(0, 3500)}`).join('\n\n---\n\n');
+       facts = await ai.jsonCall({
+-        model: s.extractModel,
++        model: s.extractModel, label: 'facts', productId: p.id,
+         system: 'You extract product facts from competitor pages for a commercial kitchen equipment store. You report only what the sources literally state. JSON only.',
+         user: `Our product: ${p.name}\n\n${material}
+ 
+@@ -305,14 +305,14 @@ Rules: keep original units; no prices; no marketing claims or opinions; if sourc
+ 
+   // photo + admin name vs competitor main images (one call)
+   async function lookAtPhoto(p, s, photo, entries = []) {
+-    const imgs = [{ url: photo, detail: 'high' }], sent = [];
++    const imgs = [{ url: photo, detail: s.photoDetail || 'low' }], sent = [];
+     for (let i = 0; i < entries.length; i++) {
+       const url = entries[i].page.image;
+       if (!url) continue;
+       const d = await vision.loadImage({ url });
+       if (d) { imgs.push({ url: d, detail: 'low' }); sent.push({ index: i + 1, host: entries[i].page.host }); }
+     }
+-    const raw = await ai.jsonCall({ model: s.visionModel || s.writerModel, system: vision.LOOK_SYSTEM, user: vision.lookPrompt({ name: p.name, sources: sent }), images: imgs });
++    const raw = await ai.jsonCall({ model: s.visionModel || s.writerModel, label: 'look', productId: p.id, system: vision.LOOK_SYSTEM, user: vision.lookPrompt({ name: p.name, sources: sent }), images: imgs });
+     return vision.normLook(raw, sent.map((x) => x.index));
+   }
+ 
+@@ -325,6 +325,9 @@ Rules: keep original units; no prices; no marketing claims or opinions; if sourc
+   };
+   const factsText = (p) => (p.facts && p.facts.facts || []).map((f) => `- ${f.label}: ${f.value} [${(f.hosts || []).join(', ') || 'source'}; ${f.confidence}]`).join('\n');
+ 
++  // Prompt order matters for caching: OpenAI only reuses an identical PREFIX. So everything shared between products (rules, Kenya rules,
++  // JSON shape, the style profile, length targets, category knowledge) goes first in the system message, and everything that changes per
++  // product (name, photo description, search data, facts, notes) goes last in the user message, with owner feedback at the very end.
+   function buildPrompt(p, feedback = '') {
+     const s = S(), prof = profileOf(p), a = prof.analysis || {}, t = prof.targets;
+     const r = (p.research && p.research.keywords) || {};
+@@ -342,7 +345,25 @@ HARD RULES
+ ${kenya.KENYA_RULES}
+ 
+ Return JSON only, exactly this shape:
+-{"primary_keyword":"","secondary_keywords":["3-5 long-tail phrases a Kenyan buyer would type, e.g. commercial electric double fryer Kenya"],"seo_title":"max 60 chars","meta_description":"110-155 chars","h1":"","short_description":"2-3 sentence intro containing the primary keyword","sections":[{"heading":"","body":"paragraphs separated by blank lines"}],"specs":[{"label":"","value":""}],"faqs":[{"q":"","a":""}],"alt_text":"","review":{"overall":"high|medium|low","items":[{"key":"short_description | section:<exact section heading> | specs | dimensions | faqs","confidence":"high|medium|low","note":"what you are unsure of; empty only if sure"}],"owner_questions":["things only the owner can confirm"]}}`;
++{"primary_keyword":"","secondary_keywords":["3-5 long-tail phrases a Kenyan buyer would type, e.g. commercial electric double fryer Kenya"],"seo_title":"max 60 chars","meta_description":"110-155 chars","h1":"","short_description":"2-3 sentence intro containing the primary keyword","sections":[{"heading":"","body":"paragraphs separated by blank lines"}],"specs":[{"label":"","value":""}],"faqs":[{"q":"","a":""}],"alt_text":"","review":{"overall":"high|medium|low","items":[{"key":"short_description | section:<exact section heading> | specs | dimensions | faqs","confidence":"high|medium|low","note":"what you are unsure of; empty only if sure"}],"owner_questions":["things only the owner can confirm"]}}
++
++STYLE PROFILE: ${prof.name}
++Title pattern: ${a.title_pattern || ''}
++Meta pattern: ${a.meta_pattern || ''}
++H1 pattern: ${a.h1_pattern || ''}
++Tone: ${a.tone || ''}
++Section order: ${(a.structure || []).join(' > ')}
++Paragraph style: ${a.paragraph_style || ''}
++Specs: ${a.spec_presentation || ''}
++FAQ style: ${a.faq_style || ''}
++Keyword placement: ${a.keyword_placement || ''}
++Do: ${(a.do || []).join('; ')}
++Don't: ${(a.dont || []).join('; ')}
++${prof.rules ? 'Extra rules from the owner: ' + prof.rules : ''}
++Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections; at least ${t.sectionsMin} sections; at least ${t.faqMin} FAQs.${t.wordsMax >= 900 ? '\nLONG-FORM: all of that length must be useful content, never padding or repetition. Build depth from real material: who it suits and use cases, buying checklist (power, capacity, space), installation and power needs, care and maintenance, common mistakes, what to compare it with, and delivery and support in Kenya, but only where FACTS, PRODUCT NOTES or SHOP KNOWLEDGE support it.' : ''}
++
++SHOP KNOWLEDGE
++${knowledgeOf(p) || '(none provided)'}`;
+ 
+     const user = `PRODUCT: ${p.name}
+ PHOTO AND NAME (sources of truth: nothing below may contradict them)
+@@ -363,27 +384,12 @@ ${p.facts && p.facts.variant_warning ? 'WARNING: ' + p.facts.variant_warning + '
+ PRODUCT NOTES (owner's own expertise — highest priority)
+ ${p.unique && p.unique.trim() ? p.unique.trim() : '(none provided)'}
+ 
+-SHOP KNOWLEDGE
+-${knowledgeOf(p) || '(none provided)'}
+-
+ COMPETITOR STRUCTURE (topics and depth only, do not copy)
+ ${((p.research && p.research.sources) || []).map((x) => `${x.host}${x.structureOnly ? ' (different size: structure only)' : ''}: ${x.words} words, ${x.faqs} FAQs, headings: ${x.headings.filter((h) => h.level <= 3).map((h) => h.text).join(' | ')}`).join('\n') || '(none)'}
+ 
+-STYLE PROFILE: ${prof.name}
+-Title pattern: ${a.title_pattern || ''}
+-Meta pattern: ${a.meta_pattern || ''}
+-H1 pattern: ${a.h1_pattern || ''}
+-Tone: ${a.tone || ''}
+-Section order: ${(a.structure || []).join(' > ')}
+-Paragraph style: ${a.paragraph_style || ''}
+-Specs: ${a.spec_presentation || ''}
+-FAQ style: ${a.faq_style || ''}
+-Keyword placement: ${a.keyword_placement || ''}
+-Do: ${(a.do || []).join('; ')}
+-Don't: ${(a.dont || []).join('; ')}
+-${prof.rules ? 'Extra rules from the owner: ' + prof.rules : ''}
+-Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections; at least ${t.sectionsMin} sections; at least ${t.faqMin} FAQs.${t.wordsMax >= 900 ? '\nLONG-FORM: all of that length must be useful content, never padding or repetition. Build depth from real material: who it suits and use cases, buying checklist (power, capacity, space), installation and power needs, care and maintenance, common mistakes, what to compare it with, and delivery and support in Kenya, but only where FACTS, PRODUCT NOTES or SHOP KNOWLEDGE support it.' : ''}${feedback ? `\n\nOWNER FEEDBACK ON THE LAST VERSION (apply it): ${feedback}` : ''}`;
+-    return { system, user };
++${feedback ? `\n\nOWNER FEEDBACK ON THE LAST VERSION (apply it): ${feedback}` : ''}`;
++    const cacheKey = `seo:${p.profileId || s.defaultProfileId || 'default'}:${p.major_category || 'x'}`;
++    return { system, user, cacheKey };
+   }
+ 
+   const normDraft = (d) => ({
+@@ -419,7 +425,7 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+   async function visualQA(p, s, draft, photo) {
+     if (!photo) return { checked: false, reason: 'No product photo to check against. The copy was not checked visually.', at: Date.now() };
+     try {
+-      const raw = await ai.jsonCall({ model: s.qaModel || s.visionModel || s.writerModel, system: vision.QA_SYSTEM, user: vision.qaPrompt({ name: p.name, draft }), images: [{ url: photo, detail: 'high' }] });
++      const raw = await ai.jsonCall({ model: s.qaModel || s.visionModel || s.writerModel, label: 'qa-photo', productId: p.id, system: vision.QA_SYSTEM, user: vision.qaPrompt({ name: p.name, draft }), images: [{ url: photo, detail: s.qaDetail || 'low' }] });
+       return vision.normQA(raw);
+     } catch (e) { return { checked: false, reason: `Photo check failed: ${e.message}`, at: Date.now() }; }
+   }
+@@ -436,14 +442,17 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+     const prompt = feedback ? buildPrompt(p, feedback) : base;
+     const tgt = profileOf(p).targets;
+     let sawPhoto = !!photo && s.writerSeesPhoto !== false;
+-    const callWriter = async (args) => {
+-      if (sawPhoto) {
+-        try { return await ai.jsonCall({ model: s.writerModel, ...args, images: [{ url: photo, detail: 'high' }] }); }
++    // The photo goes with the first draft and with the photo-mismatch rewrite only. The length and quality retries edit an existing draft
++    // against text rules, so they are sent text-only (the QA AI still checks the result against the photo afterwards).
++    const callWriter = async (args, { photo: withPhoto = false, label = 'write' } = {}) => {
++      const meta = { cacheKey: prompt.cacheKey, label, productId: p.id };
++      if (withPhoto && sawPhoto) {
++        try { return await ai.jsonCall({ model: s.writerModel, ...args, ...meta, images: [{ url: photo, detail: s.photoDetail || 'low' }] }); }
+         catch { sawPhoto = false; } // this writing model cannot take images: carry on without, and say so
+       }
+-      return ai.jsonCall({ model: s.writerModel, ...args });
++      return ai.jsonCall({ model: s.writerModel, ...args, ...meta });
+     };
+-    let raw = await callWriter(prompt);
++    let raw = await callWriter({ system: prompt.system, user: prompt.user }, { photo: true, label: 'write' });
+     let draft = normDraft(raw);
+     const wc0 = qa.countWords(draft);
+     if (tgt.wordsMin && wc0 < tgt.wordsMin * 0.85) {
+@@ -453,7 +462,7 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+       raw = await callWriter({
+         system: prompt.system,
+         user: `${prompt.user}\n\nYOUR DRAFT IS TOO SHORT (${wc0} words; this style needs ${tgt.wordsMin}-${tgt.wordsMax}). Expand it into a fuller, more useful page: deepen sections and add the sections a buyer would want (use cases, buying checklist, installation and power needs, care and maintenance, comparisons, common mistakes). Topics competitors cover that you may address if the facts support them: ${topics.join(' | ') || 'none'}. Use ONLY the facts, notes and knowledge above. No padding, no repetition. Same JSON shape, including "review".\n\nDRAFT:\n${JSON.stringify(draft)}`,
+-      });
++      }, { label: 'write-expand' });
+       draft = normDraft(raw);
+     }
+     step(p, 'Checking quality');
+@@ -464,7 +473,7 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+       const fixedRaw = await callWriter({
+         system: prompt.system,
+         user: `${prompt.user}\n\nYOUR PREVIOUS DRAFT FAILED THESE CHECKS:\n${errs.map((e) => '- ' + e.msg).join('\n')}\n\nPREVIOUS DRAFT:\n${JSON.stringify(draft)}\n\nRewrite it to fix every issue. Remove any number that is not in FACTS, PRODUCT NOTES or SHOP KNOWLEDGE. Use fresh wording. Same JSON shape, including "review".`,
+-      });
++      }, { label: 'write-fix' });
+       const fixed = normDraft(fixedRaw);
+       const r2 = await runQA(p, fixed);
+       if (r2.issues.filter((i) => i.level === 'error').length <= errs.length) { draft = fixed; result = r2; raw = fixedRaw; }
+@@ -480,7 +489,7 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+         const fixedRaw = await callWriter({
+           system: prompt.system,
+           user: `${prompt.user}\n\nA PHOTO CHECK FOUND THESE PROBLEMS IN YOUR DRAFT:\n${vErrs.map((e) => '- ' + e.msg).join('\n')}\n\nPREVIOUS DRAFT:\n${JSON.stringify(draft)}\n\nRewrite it so nothing contradicts the photo or the admin name. Remove any claim you cannot support. If the name and the photo disagree, follow the photo and say so in "review". Same JSON shape, including "review".`,
+-        });
++        }, { photo: true, label: 'write-photofix' });
+         const fixed = normDraft(fixedRaw);
+         const vq2 = await visualQA(p, s, fixed, photo);
+         if (vq2.checked && visErrors(vq2).length <= vErrs.length) { draft = fixed; vq = vq2; raw = fixedRaw; result = await runQA(p, draft); }
+@@ -510,13 +519,38 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+     }
+   }
+ 
++  // ---------- token usage ----------
++  // Every AI call reports its tokens (see lib/ai.js). Totals are kept per step and per product so the Settings page can show
++  // what a batch really cost and how often the prompt cache was hit (cached / input).
++  const blankUsage = () => ({ calls: 0, prompt: 0, cached: 0, completion: 0 });
++  const addTo = (t, u) => { t.calls = (t.calls || 0) + 1; t.prompt = (t.prompt || 0) + u.prompt; t.cached = (t.cached || 0) + u.cached; t.completion = (t.completion || 0) + u.completion; };
++  ai.onUsage((u) => {
++    const db = store.db, t = db.usage || (db.usage = { since: Date.now(), ...blankUsage(), byLabel: {} });
++    addTo(t, u);
++    addTo(t.byLabel[u.label] || (t.byLabel[u.label] = blankUsage()), u);
++    const p = u.productId && db.products[u.productId];
++    if (p) addTo(p.usage || (p.usage = blankUsage()), u);
++    store.save();
++  });
++  const usage = () => store.db.usage || { since: Date.now(), ...blankUsage(), byLabel: {} };
++  const resetUsage = () => { store.db.usage = { since: Date.now(), ...blankUsage(), byLabel: {} }; products().forEach((p) => { delete p.usage; }); store.save(); };
++
+   // ---------- queue ----------
+   const queue = [];
+-  let active = false, running = 0;
++  let active = false, running = 0, lastKey = '';
+   const qstats = () => ({ active, running, waiting: queue.length });
++  // Products with the same style profile and category share the long start of the writing prompt. Running them back to back
++  // keeps that prefix in OpenAI's cache (it expires after a few minutes idle), so prefer the next waiting product that matches the last one.
++  const cacheGroup = (id) => { const q = store.db.products[id]; return q ? `${q.profileId || S().defaultProfileId}|${q.major_category || ''}` : ''; };
++  function nextId() {
++    const i = lastKey ? queue.findIndex((id) => cacheGroup(id) === lastKey) : -1;
++    const [id] = queue.splice(i < 0 ? 0 : i, 1);
++    lastKey = cacheGroup(id);
++    return id;
++  }
+   function pump() {
+     while (active && running < Math.max(1, S().concurrency) && queue.length) {
+-      const id = queue.shift();
++      const id = nextId();
+       running++;
+       processProduct(id).finally(() => { running--; pump(); bus.emit('queue', qstats()); });
+     }
+@@ -697,7 +731,7 @@ Length: ${t.wordsMin}-${t.wordsMax} words across short_description and sections;
+   const toJsonl = (rows) => rows.map((r) => JSON.stringify({ messages: [{ role: 'system', content: r.system }, { role: 'user', content: r.input }, { role: 'assistant', content: r.output }] })).join('\n');
+ 
+   return {
+-    bus, store, S, newProduct, summary, touch, products, enqueue, redo, redoable, start, pause, qstats, processProduct,
++    bus, store, S, newProduct, summary, touch, products, enqueue, redo, redoable, start, pause, qstats, processProduct, usage, resetUsage,
+     regenerate, approveAll, setFinal, runQA, photoCheck, setReviewChecked, remerge, publish, catalogueCandidates, suggestMatches, applyMatches, trySources, importFromSupabase, buildDescription, buildPrompt, exportRows, toJsonl, profileOf, slugify, IMAGES,
+   };
+ }
+diff --git a/lib/kenya.js b/lib/kenya.js
+index dfd19a3..e18ac69 100644
+--- a/lib/kenya.js
++++ b/lib/kenya.js
+@@ -14,16 +14,23 @@ const SKIP_HOSTS = /(youtube|facebook|instagram|pinterest|tiktok|twitter|x\.com|
+ const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+ const hostMatches = (h, pref) => h === pref || h.endsWith('.' + pref);
+ 
++// "Kenya" goes after every Google keyword: it pulls Kenyan shops and Kenyan phrasing to the top. (The competitor sites' own search
++// boxes are NOT given it: they need every word to be in the product text, so an extra word would hide products.)
++const withKenya = (q) => (/\bkenya\b/i.test(q) ? q : `${q} Kenya`);
++
+ async function harvest(name, { preferredHosts = [] } = {}) {
+-  const base = [`${name} price in Kenya`, `buy ${name} Nairobi`, `${name} specifications`];
++  const base = [`${name} price in Kenya`, `buy ${name} Nairobi`, `${name} specifications`].map(withKenya);
+   const pref = preferredHosts.slice(0, 4).map((h) => `site:${h} ${name}`);
+   const out = { organic: [], preferred: [], related: [], questions: [], errors: [], attempted: base.length + pref.length };
+   for (const q of [...base, ...pref]) {
+     try {
+-      const r = await net.serperSearch(q);
+-      const target = q.startsWith('site:') ? out.preferred : out.organic;
++      const isSite = q.startsWith('site:');
++      let r = await net.serperSearch(isSite ? withKenya(q) : q);
++      // a site: search that comes back empty with "Kenya" added is repeated once without it, so a shop whose pages never say Kenya is not missed
++      if (isSite && !(r.organic || []).length) r = await net.serperSearch(q);
++      const target = isSite ? out.preferred : out.organic;
+       (r.organic || []).slice(0, 8).forEach((o) => target.push({ title: o.title || '', link: o.link || '', snippet: o.snippet || '' }));
+-      if (!q.startsWith('site:')) {
++      if (!isSite) {
+         (r.relatedSearches || []).forEach((x) => x.query && out.related.push(x.query));
+         (r.peopleAlsoAsk || []).forEach((x) => x.question && out.questions.push(x.question));
+       }
+@@ -78,4 +85,4 @@ function pickSources(organic, ownSiteUrl, existingUrls = [], opts = {}) {
+   return picks;
+ }
+ 
+-module.exports = { KENYA_RULES, harvest, pickSources };
++module.exports = { KENYA_RULES, harvest, pickSources, withKenya };
+diff --git a/lib/profiles.js b/lib/profiles.js
+index 5dc7cf7..f683966 100644
+--- a/lib/profiles.js
++++ b/lib/profiles.js
+@@ -87,7 +87,7 @@ Headings in order: ${p.headings.map((h) => `H${h.level} ${h.text}`).slice(0, 30)
+ Words: ${p.wordCount}; spec rows: ${p.specs.length}; FAQ items: ${p.faqCount}; structured data: ${(p.ldTypes || []).join(', ') || 'none'}
+ Opening text (for tone only): ${p.text.slice(0, 450)}`).join('\n\n');
+ 
+-  const analysis = await ai.jsonCall({
++  const analysis = await ai.jsonCall({ label: 'style-profile',
+     model,
+     system: 'You are a senior e-commerce SEO analyst. You study reference product pages and write a reusable style guide that another writer can follow to produce the SAME KIND of SEO page about different products. Describe patterns, never quote sentences.',
+     user: `${sample}
+diff --git a/lib/settings.js b/lib/settings.js
+index d7e90b9..9d856ca 100644
+--- a/lib/settings.js
++++ b/lib/settings.js
+@@ -10,11 +10,13 @@ const DEFAULTS = {
+     'Large Appliances', 'Hotel Appliances', 'Office Kitchen', 'Butchery Equipment',
+     'Food Processors', 'Measuring Tools', 'Home Kitchen', 'Juakali Fabrications',
+   ],
+-  extractModel: 'gpt-4o-mini',
+-  writerModel: 'gpt-4o', // paste a fine-tuned model id (ft:...) here after you fine-tune
+-  visionModel: 'gpt-4o', // looks at the photo before writing (needs image input)
+-  qaModel: 'gpt-4o', // the separate QA AI that checks the finished copy against the photo
+-  writerSeesPhoto: true, // attach the product photo to the writing call (turned off automatically if the writing model cannot take images)
++  extractModel: 'gpt-4.1-mini',
++  writerModel: 'gpt-4.1-mini', // paste a fine-tuned model id (ft:...) here after you fine-tune
++  visionModel: 'gpt-4.1-mini', // looks at the photo before writing (needs image input)
++  qaModel: 'gpt-4.1-mini', // the separate QA AI that checks the finished copy against the photo
++  writerSeesPhoto: true, // attach the product photo to the FIRST writing call (retries are text-only; turned off automatically if the writing model cannot take images)
++  photoDetail: 'low', // image detail for your product photo in the look and writing calls: 'low' (cheapest) | 'auto' | 'high'
++  qaDetail: 'low', // image detail for the photo QA check. Switch to 'high' if QA misses small things like burner or door counts
+   concurrency: 2,
+   sourcesPerProduct: 3, // competitor pages read per product (1-4)
+   preferredSites: [], // e.g. ["jumia.co.ke","kilimall.co.ke"]: tried first, in this order
+@@ -30,7 +32,16 @@ const DEFAULTS = {
+   extraColumns: {},
+ };
+ 
++// Models saved by an earlier version of the settings page were the old defaults. Treat those as "not chosen" so the new
++// defaults apply. Anything else (a fine-tuned ft:... id, or a model you typed yourself) is kept.
++const OLD_DEFAULT_MODELS = new Set(['gpt-4o', 'gpt-4o-mini']);
++const MODEL_KEYS = ['extractModel', 'writerModel', 'visionModel', 'qaModel'];
++const DETAILS = new Set(['low', 'auto', 'high']);
++
+ function getSettings(store) {
+-  return { ...DEFAULTS, ...(store.db.settings || {}) };
++  const saved = { ...(store.db.settings || {}) };
++  for (const k of MODEL_KEYS) if (OLD_DEFAULT_MODELS.has(saved[k])) delete saved[k];
++  for (const k of ['photoDetail', 'qaDetail']) if (k in saved && !DETAILS.has(saved[k])) delete saved[k];
++  return { ...DEFAULTS, ...saved };
+ }
+ module.exports = { DEFAULTS, getSettings };
+diff --git a/lib/vision.js b/lib/vision.js
+index 6c5d1f8..ca3ce53 100644
+--- a/lib/vision.js
++++ b/lib/vision.js
+@@ -11,20 +11,37 @@ const UA = 'Mozilla/5.0 (compatible; KitchenAll-SEO-Research/1.0)';
+ const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' };
+ 
+ // ---------- loading images (data URLs, so the AI never depends on hotlink rules) ----------
++// Photos are shrunk before they are sent (longest side 768px, JPEG). The AI sees at most 512px at "low" detail anyway, so
++// a 4000px phone photo only costs upload time and, on some models, extra image tokens. Needs the optional `sharp`
++// package (npm i sharp). Without it the original file is sent, exactly as before.
++let sharp = null;
++try { sharp = require('sharp'); } catch { /* optional */ }
++const MAX_SIDE = 768;
++async function shrink(buf, type) {
++  if (!sharp || type === 'image/gif') return { buf, type };
++  try {
++    const out = await sharp(buf, { failOn: 'none' }).rotate()
++      .resize({ width: MAX_SIDE, height: MAX_SIDE, fit: 'inside', withoutEnlargement: true })
++      .flatten({ background: '#ffffff' }).jpeg({ quality: 80 }).toBuffer();
++    return out.length < buf.length ? { buf: out, type: 'image/jpeg' } : { buf, type };
++  } catch { return { buf, type }; }
++}
++const toDataUrl = ({ buf, type }) => `data:${type};base64,${buf.toString('base64')}`;
++
+ async function loadImage(src) {
+   try {
+     if (src.file) {
+       if (!fs.existsSync(src.file)) return null;
+       const buf = fs.readFileSync(src.file);
+       if (buf.length > 8e6) return null;
+-      return `data:${MIME[path.extname(src.file).toLowerCase()] || 'image/jpeg'};base64,${buf.toString('base64')}`;
++      return toDataUrl(await shrink(buf, MIME[path.extname(src.file).toLowerCase()] || 'image/jpeg'));
+     }
+     if (!/^https?:\/\//i.test(src.url || '')) return null;
+     const res = await fetch(src.url, { headers: { 'User-Agent': UA, Accept: 'image/*' }, timeout: 15000, size: 8e6, redirect: 'follow' });
+     if (!res.ok) return null;
+     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+     if (!/^image\/(jpeg|png|webp|gif)$/.test(type)) return null;
+-    return `data:${type};base64,${(await res.buffer()).toString('base64')}`;
++    return toDataUrl(await shrink(await res.buffer(), type));
+   } catch { return null; }
+ }
+ 
+diff --git a/package.json b/package.json
+index e725ef4..bd8b8b1 100644
+--- a/package.json
++++ b/package.json
+@@ -20,5 +20,8 @@
+     "node-fetch": "^2.7.0",
+     "openai": "^7.4.0",
+     "playwright": "^1.63.0"
++  },
++  "optionalDependencies": {
++    "sharp": "^0.35.5"
+   }
+ }
+diff --git a/tests/cost.test.js b/tests/cost.test.js
+new file mode 100644
+index 0000000..7ca0f40
+--- /dev/null
++++ b/tests/cost.test.js
+@@ -0,0 +1,162 @@
++// Cost controls: cacheable prompt prefix, text-only retries, queue grouping, usage tracking, settings migration, photo resize.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('fs'); const os = require('os'); const path = require('path');
++const net = require('../lib/net'); const ai = require('../lib/ai'); const vision = require('../lib/vision');
++const { Store } = require('../lib/store'); const { createEngine } = require('../lib/engine');
++const { DEFAULT_PROFILE } = require('../lib/profiles');
++const { getSettings, DEFAULTS } = require('../lib/settings');
++
++const realJsonCall = ai.jsonCall, realLoadImage = vision.loadImage;
++const draft = (over = {}) => ({
++  primary_keyword: 'gas cooker', seo_title: 'Gas Cooker 4 Burner | Price in Kenya', h1: 'Gas Cooker 4 Burner', short_description: 'A 4 burner gas cooker for Nairobi kitchens.',
++  meta_description: 'Buy a 4 burner gas cooker in Nairobi. Stainless steel build for restaurants, with delivery across Kenya today and support.',
++  sections: [{ heading: 'Why it works', body: 'Four burners and an oven. '.repeat(40) }, { heading: 'Size', body: 'It measures 900 mm wide. '.repeat(40) }],
++  specs: [{ label: 'Burners', value: '4' }, { label: 'Width', value: '900 mm' }], faqs: [{ q: 'a?', a: 'b' }, { q: 'c?', a: 'd' }, { q: 'e?', a: 'f' }], alt_text: 'Gas cooker', ...over,
++});
++const newEngine = (profile = DEFAULT_PROFILE) => {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cost-'));
++  const store = new Store(path.join(dir, 'store.json')); store.db.profiles.default = profile;
++  return createEngine(store);
++};
++const quietNet = () => { net.serperSearch = async () => ({ organic: [], relatedSearches: [], peopleAlsoAsk: [] }); };
++
++test('defaults: every step uses gpt-4.1-mini, image detail is low', () => {
++  for (const k of ['extractModel', 'writerModel', 'visionModel', 'qaModel']) assert.equal(DEFAULTS[k], 'gpt-4.1-mini', k);
++  assert.equal(DEFAULTS.photoDetail, 'low'); assert.equal(DEFAULTS.qaDetail, 'low');
++});
++
++test('settings saved by the old version (gpt-4o, gpt-4o-mini) fall back to the new defaults; ft: and custom models are kept', () => {
++  const s = getSettings({ db: { settings: { writerModel: 'gpt-4o', extractModel: 'gpt-4o-mini', visionModel: 'ft:gpt-4.1-mini:acme::1', qaModel: 'my-model', photoDetail: 'weird', qaDetail: 'high' } } });
++  assert.equal(s.writerModel, 'gpt-4.1-mini'); assert.equal(s.extractModel, 'gpt-4.1-mini');
++  assert.equal(s.visionModel, 'ft:gpt-4.1-mini:acme::1'); assert.equal(s.qaModel, 'my-model');
++  assert.equal(s.photoDetail, 'low', 'invalid detail ignored'); assert.equal(s.qaDetail, 'high');
++});
++
++test('writing prompt: everything shared between products is in the system message, everything per product is in the user message', () => {
++  const eng = newEngine();
++  eng.store.db.knowledge._global = 'We install everything ourselves.'; eng.store.db.knowledge.Cooking = 'Gas is common in Nairobi hotels.';
++  const a = eng.newProduct({ name: 'Gas Cooker 4 Burner 900 mm', unique: 'Notes about cooker A.', major_category: 'Cooking' });
++  const b = eng.newProduct({ name: 'Deep Fryer 20L', unique: 'Notes about fryer B.', major_category: 'Cooking' });
++  const c = eng.newProduct({ name: 'Chest Freezer', unique: 'Notes about freezer C.', major_category: 'Refrigeration' });
++  const pa = eng.buildPrompt(a), pb = eng.buildPrompt(b), pc = eng.buildPrompt(c);
++  assert.equal(pa.system, pb.system, 'same profile + category: identical system message, so it is cacheable');
++  assert.notEqual(pa.system, pc.system, 'different category knowledge');
++  assert.ok(pa.system.startsWith(pc.system.slice(0, 2000)), 'the long start (rules, Kenya rules, JSON shape, style) is shared across categories too');
++  assert.match(pa.system, /STYLE PROFILE:/); assert.match(pa.system, /Gas is common in Nairobi hotels/); assert.match(pa.system, /Length: \d+-\d+ words/);
++  assert.doesNotMatch(pa.system, /Gas Cooker 4 Burner|Notes about cooker A/, 'nothing product-specific in the shared part');
++  assert.match(pa.user, /^PRODUCT: Gas Cooker 4 Burner 900 mm/); assert.match(pa.user, /Notes about cooker A\./);
++  assert.doesNotMatch(pa.user, /STYLE PROFILE|SHOP KNOWLEDGE/);
++  assert.equal(pa.cacheKey, pb.cacheKey); assert.notEqual(pa.cacheKey, pc.cacheKey);
++  const withFb = eng.buildPrompt(a, 'Make it shorter');
++  assert.equal(withFb.system, pa.system, 'feedback never changes the cacheable part'); assert.ok(withFb.user.endsWith('Make it shorter'));
++});
++
++test('retries are text-only; the photo goes with the first draft and the QA check, at the configured detail', async () => {
++  const profile = { ...DEFAULT_PROFILE, targets: { ...DEFAULT_PROFILE.targets, wordsMin: 5000, wordsMax: 6000 } }; // forces the expand + fix retries
++  const eng = newEngine(profile);
++  vision.productImage = async () => 'data:image/png;base64,AAAA'; vision.loadImage = async () => null; quietNet();
++  const seen = [];
++  ai.jsonCall = async ({ system, user, images, label, cacheKey }) => {
++    seen.push({ label, images: images || [], cacheKey });
++    if (system === vision.LOOK_SYSTEM) return { seen: { product_type: 'cooker' }, name_check: { verdict: 'matches' }, sources: [] };
++    if (system === vision.QA_SYSTEM) return { image_matches_copy: 'yes', name_vs_image: { verdict: 'matches' }, contradictions: [], unconfirmed: [] };
++    return draft();
++  };
++  const p = eng.newProduct({ name: 'Gas Cooker 4 Burner 900 mm', imageUrl: 'https://x/y.png', unique: 'Four burners, 900 mm wide. Installed in Nairobi.' });
++  await eng.processProduct(p.id);
++  assert.equal(p.status, 'review', p.error);
++  const by = (l) => seen.filter((c) => c.label === l);
++  assert.equal(by('write').length, 1); assert.equal(by('write')[0].images.length, 1); assert.equal(by('write')[0].images[0].detail, 'low');
++  assert.ok(by('write-expand').length >= 1, 'short draft triggered the expand retry'); by('write-expand').concat(by('write-fix')).forEach((c) => assert.equal(c.images.length, 0, c.label + ' is text-only'));
++  assert.equal(by('qa-photo').length, 1); assert.equal(by('qa-photo')[0].images[0].detail, 'low');
++  assert.equal(by('look')[0].images[0].detail, 'low');
++  seen.filter((c) => c.label.startsWith('write')).forEach((c) => assert.ok(c.cacheKey, c.label + ' carries the cache key'));
++  assert.equal(p.wrote.sawPhoto, true);
++});
++
++test('the photo and QA detail settings are honoured', async () => {
++  const eng = newEngine();
++  eng.store.db.settings = { photoDetail: 'high', qaDetail: 'auto' };
++  vision.productImage = async () => 'data:image/png;base64,AAAA'; vision.loadImage = async () => null; quietNet();
++  const seen = [];
++  ai.jsonCall = async ({ system, images, label }) => {
++    seen.push({ label, detail: images && images[0] && images[0].detail });
++    if (system === vision.LOOK_SYSTEM) return { seen: {}, name_check: { verdict: 'matches' }, sources: [] };
++    if (system === vision.QA_SYSTEM) return { image_matches_copy: 'yes', name_vs_image: { verdict: 'matches' }, contradictions: [], unconfirmed: [] };
++    return draft();
++  };
++  const p = eng.newProduct({ name: 'Gas Cooker 4 Burner 900 mm', imageUrl: 'https://x/y.png', unique: 'Four burners, 900 mm wide. Installed in Nairobi.' });
++  await eng.processProduct(p.id);
++  assert.equal(seen.find((c) => c.label === 'write').detail, 'high'); assert.equal(seen.find((c) => c.label === 'qa-photo').detail, 'auto');
++});
++
++test('queue: waiting products with the same style profile and category run back to back', async () => {
++  const eng = newEngine();
++  eng.store.db.settings = { concurrency: 1 };
++  vision.productImage = async () => null; quietNet();
++  const order = [];
++  ai.jsonCall = async ({ label, user }) => { if (label === 'write') order.push(user.match(/^PRODUCT: (.*)$/m)[1]); return draft(); };
++  const mk = (name, cat) => eng.newProduct({ name, major_category: cat, unique: 'Installed by our technicians in Nairobi. Four burners.' });
++  const ps = [mk('A1', 'Cooking'), mk('B1', 'Refrigeration'), mk('A2', 'Cooking'), mk('B2', 'Refrigeration'), mk('A3', 'Cooking')];
++  eng.enqueue(ps.map((p) => p.id)); eng.start();
++  await new Promise((r) => { const t = setInterval(() => { if (ps.every((p) => !['queued', 'working'].includes(p.status))) { clearInterval(t); r(); } }, 20); });
++  assert.deepEqual(order, ['A1', 'A2', 'A3', 'B1', 'B2']);
++});
++
++test('usage: tokens and cache hits are totalled per step and per product; prompt_cache_key is sent; detail defaults to low', async () => {
++  ai.jsonCall = realJsonCall;
++  const bodies = [];
++  ai._setClient({ chat: { completions: { create: async (body) => { bodies.push(body); return { choices: [{ message: { content: '{"ok":true}' } }], usage: { prompt_tokens: 2000, completion_tokens: 300, prompt_tokens_details: { cached_tokens: 1536 } } }; } } } });
++  process.env.AI_USAGE_LOG = '0';
++  const eng = newEngine(); const p = eng.newProduct({ name: 'X' });
++  await ai.jsonCall({ model: 'gpt-4.1-mini', system: 's', user: 'u', images: [{ url: 'data:image/png;base64,AAAA' }], cacheKey: 'seo:default:Cooking', label: 'write', productId: p.id });
++  await ai.jsonCall({ model: 'gpt-4.1-mini', system: 's', user: 'u', label: 'qa-photo', productId: p.id });
++  assert.equal(bodies[0].prompt_cache_key, 'seo:default:Cooking'); assert.equal(bodies[0].messages[1].content[1].image_url.detail, 'low');
++  assert.ok(!('prompt_cache_key' in bodies[1]));
++  const u = eng.usage();
++  assert.equal(u.calls, 2); assert.equal(u.prompt, 4000); assert.equal(u.cached, 3072); assert.equal(u.completion, 600);
++  assert.equal(u.byLabel.write.cached, 1536); assert.equal(p.usage.calls, 2);
++  eng.resetUsage(); assert.equal(eng.usage().calls, 0); assert.equal(p.usage, undefined);
++});
++
++test('a model or API that rejects prompt_cache_key: the call is retried without it', async () => {
++  ai.jsonCall = realJsonCall; let n = 0; const keys = [];
++  ai._setClient({ chat: { completions: { create: async (body) => { n++; keys.push('prompt_cache_key' in body); if ('prompt_cache_key' in body) { const e = new Error('Unrecognized request argument supplied: prompt_cache_key'); e.status = 400; throw e; } return { choices: [{ message: { content: '{"ok":1}' } }], usage: null }; } } } });
++  const r = await ai.jsonCall({ model: 'm', system: 's', user: 'u', cacheKey: 'k' });
++  assert.deepEqual(r, { ok: 1 }); assert.deepEqual(keys, [true, false]);
++});
++
++test('photos are shrunk before sending (when sharp is installed)', async (t) => {
++  let sharp; try { sharp = require('sharp'); } catch { return t.skip('sharp not installed'); }
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'img-'));
++  const file = path.join(dir, 'big.png');
++  await sharp({ create: { width: 3000, height: 2000, channels: 3, background: { r: 200, g: 30, b: 30 } } }).png().toFile(file);
++  vision.loadImage = realLoadImage;
++  const url = await vision.loadImage({ file });
++  assert.match(url, /^data:image\/jpeg;base64,/);
++  const meta = await sharp(Buffer.from(url.split(',')[1], 'base64')).metadata();
++  assert.equal(Math.max(meta.width, meta.height), 768); assert.ok(Buffer.from(url.split(',')[1], 'base64').length < fs.statSync(file).size);
++});
++
++test('researcher: "Kenya" is added to every Google keyword (once), and site: searches fall back to plain when empty', async () => {
++  const kenya = require('../lib/kenya');
++  assert.equal(kenya.withKenya('deep fryer 20L'), 'deep fryer 20L Kenya');
++  assert.equal(kenya.withKenya('deep fryer price in Kenya'), 'deep fryer price in Kenya', 'never doubled');
++  assert.equal(kenya.withKenya('site:shop.co.ke fryer'), 'site:shop.co.ke fryer Kenya');
++  const queries = [];
++  net.serperSearch = async (q) => { queries.push(q); return { organic: q.endsWith('Kenya') && q.startsWith('site:b.com') ? [] : [{ title: 't', link: 'https://x.co.ke/' + encodeURIComponent(q), snippet: '' }], relatedSearches: [], peopleAlsoAsk: [] }; };
++  const out = await kenya.harvest('Deep Fryer 20L', { preferredHosts: ['a.com', 'b.com'] });
++  assert.deepEqual(queries.slice(0, 3), ['Deep Fryer 20L price in Kenya', 'buy Deep Fryer 20L Nairobi Kenya', 'Deep Fryer 20L specifications Kenya']);
++  assert.ok(queries.includes('site:a.com Deep Fryer 20L Kenya'));
++  assert.ok(queries.includes('site:b.com Deep Fryer 20L Kenya') && queries.includes('site:b.com Deep Fryer 20L'), 'empty with Kenya: repeated once without it');
++  assert.ok(!queries.includes('site:a.com Deep Fryer 20L'), 'no fallback when Kenya found results');
++  assert.ok(out.organic.length && out.preferred.length);
++});
++
++test('the competitor sites\' own search boxes are NOT given the word Kenya', async () => {
++  const sitesearch = require('../lib/sitesearch'); const urls = [];
++  net.fetchText = async (u) => { urls.push(u); throw new Error('404'); };
++  await sitesearch.search('shop.co.ke', 'Deep Fryer 20L');
++  assert.ok(urls.length && urls.every((u) => !/kenya/i.test(decodeURIComponent(u).replace('shop.co.ke', ''))));
++});
+diff --git a/ui/app.js b/ui/app.js
+index 9244792..5f271fa 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -435,7 +435,9 @@ function viewSettings() {
+   main.innerHTML = `<h1>Settings</h1><div class="grid2"><div class="card"><h2>Site</h2>${t('siteName', 'Store name')}${t('siteUrl', 'Site URL')}<label>About the business (the AI reads this every time)</label><textarea data-set="siteContext" style="min-height:110px">${esc(s.siteContext)}</textarea>
+   <label>Description format saved to your site</label><select data-set="descriptionFormat"><option value="text" ${s.descriptionFormat === 'text' ? 'selected' : ''}>Plain text (safe on any page)</option><option value="html" ${s.descriptionFormat === 'html' ? 'selected' : ''}>HTML with headings and a spec table (page must render HTML)</option></select>
+   <label>Extra Supabase columns (optional, JSON)</label><textarea data-set="extraColumns" style="min-height:70px;font-family:monospace;font-size:12px" placeholder='{"h1":"h1","schema_jsonld":"jsonld"}'>${esc(Object.keys(s.extraColumns || {}).length ? JSON.stringify(s.extraColumns, null, 1) : '')}</textarea><p class="small muted">Left is a column in your products table. Right is one of h1, short_description, faqs_json, specs_json, jsonld, primary_keyword, tags. Only add columns that exist.</p></div>
+-  <div class="card"><h2>AI</h2>${t('writerModel', 'Writing model', 'gpt-4o, or your ft:… model')}${t('extractModel', 'Research model (cheaper)', 'gpt-4o-mini')}<label>Products processed at once</label><input type="number" min="1" max="5" data-set="concurrency" value="${s.concurrency}">
++  <div class="card"><h2>AI</h2>${t('writerModel', 'Writing model', 'gpt-4.1-mini, or your ft:… model')}${t('extractModel', 'Research model', 'gpt-4.1-mini')}${t('visionModel', 'Photo look model (needs image input)', 'gpt-4.1-mini')}${t('qaModel', 'Photo QA model (needs image input)', 'gpt-4.1-mini')}
++  <label>Photo detail sent to the AI (look and writing)</label><select data-set="photoDetail">${['low', 'auto', 'high'].map((d) => `<option value="${d}" ${s.photoDetail === d ? 'selected' : ''}>${d}${d === 'low' ? ' (cheapest)' : d === 'high' ? ' (most tokens)' : ''}</option>`).join('')}</select>
++  <label>Photo detail for the QA check</label><select data-set="qaDetail">${['low', 'auto', 'high'].map((d) => `<option value="${d}" ${s.qaDetail === d ? 'selected' : ''}>${d}</option>`).join('')}</select><p class="small muted">Low is enough for matching a product to its photo. If the QA misses small things such as burner or door counts, set the QA check to high.</p><label>Products processed at once</label><input type="number" min="1" max="5" data-set="concurrency" value="${s.concurrency}">
+   <label>Competitor pages to read per product (1 to 4)</label><input type="number" min="1" max="4" data-set="sourcesPerProduct" value="${s.sourcesPerProduct}">
+   <label>Preferred competitor sites, tried first, in this order (one per line)</label><textarea data-set="preferredSites" style="min-height:70px" placeholder="jumia.co.ke&#10;kilimall.co.ke">${esc((s.preferredSites || []).join('\n'))}</textarea><p class="small muted">Preferred sites you have indexed cost nothing. Others are looked up with their own search box (free) and only fall back to one Google search each.</p>
+   <label><input type="checkbox" data-set="siteSearch" ${s.siteSearch ? 'checked' : ''}> Look products up with each preferred site's own search box</label>
+@@ -443,9 +445,22 @@ function viewSettings() {
+   <label><input type="checkbox" data-set="autoFindSources" ${s.autoFindSources ? 'checked' : ''}> Find competitor pages automatically when none are given</label>
+   <label>Default reference style</label><select data-set="defaultProfileId">${S.profiles.map((p) => `<option value="${p.id}" ${p.id === s.defaultProfileId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+   <div class="card"><h2>Categories (must match your site exactly)</h2><label>Major categories, one per line</label><textarea data-set="majorCategories" style="min-height:80px">${esc(s.majorCategories.join('\n'))}</textarea><label>Sub categories, one per line</label><textarea data-set="subCategories" style="min-height:160px">${esc(s.subCategories.join('\n'))}</textarea></div></div>
++  <div class="card" id="usage-card" style="margin-top:14px"><h2>Token usage</h2><p class="small muted">Loading…</p></div>
+   <button class="btn primary" data-act="saveSettings">Save settings</button>`;
++  loadUsage();
+ }
+ 
++// Tokens used so far, per step. "Cached" is the part of the input that OpenAI charged at the cached rate: cached / input is the cache hit rate.
++const loadUsage = guard(async () => {
++  const u = await api('/usage'); const el = $('#usage-card'); if (!el) return;
++  const n = (x) => Number(x || 0).toLocaleString(), pct = (a, b) => (b ? Math.round((100 * a) / b) + '%' : '-');
++  const rows = Object.entries(u.byLabel || {}).sort((a, b) => b[1].prompt - a[1].prompt)
++    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${n(v.calls)}</td><td>${n(v.prompt)}</td><td>${pct(v.cached, v.prompt)}</td><td>${n(v.completion)}</td></tr>`).join('');
++  el.innerHTML = `<h2>Token usage</h2><p class="small muted">Since ${new Date(u.since).toLocaleString()}. ${n(u.calls)} calls, ${n(u.prompt)} input tokens (${pct(u.cached, u.prompt)} served from the cache), ${n(u.completion)} output tokens.</p>
++    ${rows ? `<table><thead><tr><th>Step</th><th>Calls</th><th>Input</th><th>Cached</th><th>Output</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="small muted">Nothing recorded yet. Run a few products.</p>'}
++    <div class="row" style="margin-top:10px"><button class="btn" data-act="resetUsage">Reset counters</button></div>`;
++});
++
+ /* ---------- actions ---------- */
+ const ACTS = {
+   go: (a) => { flushSave().catch(() => {}); S.view = a.dataset.v; S.drawer = null; render(); },
+@@ -537,6 +552,7 @@ const ACTS = {
+     const r = await post('/csv/apply', { rows, queue: $('#csvq').checked, start: $('#csvs').checked });
+     toast(`${r.updated} updated, ${r.created} created, ${r.skipped} skipped${r.queued ? `, ${r.queued} queued` : ''}`); S.csv = null; await load(); S.view = 'queue'; render();
+   }),
++  resetUsage: guard(async () => { await api('/usage/reset', { method: 'POST' }); toast('Counters reset'); loadUsage(); }),
+   saveSettings: guard(async () => {
+     const body = {}; $$('[data-set]').forEach((el) => { body[el.dataset.set] = el.type === 'checkbox' ? el.checked : el.value; });
+     await api('/settings', { method: 'PUT', body }); toast('Settings saved'); await load();

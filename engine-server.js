@@ -239,6 +239,7 @@ app.put('/api/settings', wrap((req) => {
   for (const k of ['majorCategories', 'subCategories']) if (typeof out[k] === 'string') out[k] = out[k].split('\n').map((x) => x.trim()).filter(Boolean);
   if (typeof out.preferredSites === 'string') out.preferredSites = out.preferredSites.split('\n').map((x) => x.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]).filter(Boolean);
   if ('sourcesPerProduct' in out) out.sourcesPerProduct = Math.min(4, Math.max(1, +out.sourcesPerProduct || 3));
+  for (const k of ['photoDetail', 'qaDetail']) if (k in out && !['low', 'auto', 'high'].includes(out[k])) delete out[k];
   if ('concurrency' in out) out.concurrency = Math.min(5, Math.max(1, +out.concurrency || 2));
   store.db.settings = { ...store.db.settings, ...out };
   net.setBrowser(getSettings(store).useBrowser);
@@ -280,6 +281,8 @@ app.post('/api/csv/apply', wrap((req) => {
 
 // ---------- export ----------
 const statusesFrom = (q) => (q === 'all' ? ['review', 'approved', 'published'] : q === 'approved' ? ['approved', 'published'] : [q || 'approved']);
+app.get('/api/usage', wrap(() => engine.usage()));
+app.post('/api/usage/reset', wrap(() => { engine.resetUsage(); }));
 app.get('/api/export.jsonl', (req, res) => {
   res.set({ 'Content-Type': 'application/jsonl', 'Content-Disposition': 'attachment; filename="finetune.jsonl"' });
   res.send(engine.toJsonl(engine.exportRows(statusesFrom(req.query.status))));

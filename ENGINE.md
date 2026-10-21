@@ -67,3 +67,13 @@ Export > .jsonl is OpenAI chat fine-tune format: system + exact input + the vers
 - `lib/` pipeline (engine, extract, qa, kenya, profiles, csvmatch, net, ai, store)
 - `ui/` the interface
 - `data/store.json` all engine data (back this up). `data/cache/` fetched pages.
+
+## Cost controls (tokens)
+- **One model for everything by default: `gpt-4.1-mini`** (research, photo look, writing, photo QA). Models you saved earlier as `gpt-4o` / `gpt-4o-mini` are treated as "not chosen" and move to the new default; `ft:...` ids and any other model you typed are kept. Settings > AI.
+- **Photo detail is `low`** (Settings > AI). The QA check has its own switch (`qaDetail`): set it to `high` if QA misses small things such as burner or door counts. Competitor photos are always `low`.
+- **The photo is sent 3 times per product, not 5**: look, first draft, QA. The length-expand and quality-fix retries are text-only. Only the photo-mismatch rewrite (QA found a contradiction) sends it again. Photos are shrunk to 768px first (needs the optional `sharp` package; `npm install` adds it).
+- **Prompt cache**: the writing prompt is ordered shared-first (rules, Kenya rules, JSON shape, style profile, length, category knowledge in the system message), then product-specific last. Calls carry a `prompt_cache_key` per style profile + category, and the queue runs waiting products of the same profile + category back to back.
+- **Token usage** is recorded for every call: Settings > Token usage (input, cached share, output per step), `GET /api/usage`, and one `[ai] ...` line per call in the console (`AI_USAGE_LOG=0` silences it).
+
+## "Kenya" on every Google keyword
+The researcher adds the word **Kenya** after every keyword it sends to Google (`price in Kenya`, `buy ... Nairobi Kenya`, `... specifications Kenya`, and the preferred-site `site:` searches). It is never doubled if the keyword already says Kenya. A `site:` search that comes back empty with Kenya added is repeated once without it, so a shop whose pages never say Kenya is not missed. The competitor sites' own search boxes and the catalogue matching are deliberately left alone: they need every word to appear in the product text, so an extra word would hide products. Lives in `withKenya()` in `lib/kenya.js`.
