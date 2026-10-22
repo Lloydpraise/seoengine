@@ -77,3 +77,23 @@ Export > .jsonl is OpenAI chat fine-tune format: system + exact input + the vers
 
 ## "Kenya" on every Google keyword
 The researcher adds the word **Kenya** after every keyword it sends to Google (`price in Kenya`, `buy ... Nairobi Kenya`, `... specifications Kenya`, and the preferred-site `site:` searches). It is never doubled if the keyword already says Kenya. A `site:` search that comes back empty with Kenya added is repeated once without it, so a shop whose pages never say Kenya is not missed. The competitor sites' own search boxes and the catalogue matching are deliberately left alone: they need every word to appear in the product text, so an extra word would hide products. Lives in `withKenya()` in `lib/kenya.js`.
+
+## Lean mode: fewer calls, fewer images (default)
+Settings > AI > **Picture use**:
+- **Once (default).** Your photo goes to the AI exactly one time, in the *look* step, which writes a structured description (type, number of burners/doors/shelves, finish, what a photo cannot show). The writer and the checks read that text. No competitor photos, no photo in the writing call, no automatic photo QA. The review's **Re-check against photo** button still runs the photo QA on demand. If the name and the photo disagree, the look step flags it and a photo row appears in the review.
+- **Full.** The old behaviour (about 6 images and 4 calls per product, up to 8 and 6 when QA finds a mismatch).
+
+Typical product in Once mode: 3 calls (look, facts, write), 1 image.
+
+Other cuts that apply in both modes:
+- **Expansion is append-only.** A draft under `expandBelow` (75%) of the minimum word count gets ONE call that returns only the missing sections, instead of the whole page again.
+- **Title/meta/keyword problems get a tiny patch call** (about 100 tokens out) instead of a full rewrite. Body problems (copied wording, invented numbers) still get one full rewrite.
+- **No blind repeats.** Unparseable JSON is retried once (it was five times). A cut-off answer is not repeated. The writer only falls back to text-only when the error is about images (it used to retry on any error).
+- **Output cap** on every call (8,000 tokens for the writer, 1,500 for the look step).
+- **Spend control.** Settings > AI > *Stop the queue when estimated spend reaches*. The Token usage card shows estimated USD, cost per finished product and a projection for the products still to do. Prices come from `prices` in `lib/settings.js`: check platform.openai.com/pricing.
+
+## Code instead of AI, merged research, research cache
+- **Title / meta fixed in code.** `qa.fixHead` trims a title over 60 or a meta over 155 at word boundaries, puts the primary keyword into the title, and fills an empty title/meta from the H1 / intro. The AI patch call only runs if errors remain (for example no keyword was chosen). The body is never touched.
+- **Photo description checked in code.** The look step lists countable parts ("4 burners", "2 doors"). `vision.visibleCountIssues` flags any count of burners/plates/doors/trays/decks/tiers/shelves/heads/pans in the copy that the description does not contain. It shows as a Medium note on that part of the review, costs no AI call, and refreshes when you edit the copy. It does not catch things a count cannot (glass vs solid door, finish): use "Re-check against photo" for those.
+- **Research: Merged (Settings > AI > Research).** One call gets the photo, the admin name and the competitor text, and returns the photo description, a same / similar / different verdict for each page (judged from its text) and the facts. A page judged "different" that was auto-picked is used for structure only and its facts are dropped. Default is still Separate (look, then facts); compare both on the same 10 products before switching.
+- **Research cache.** Research is reused until the name, photo, your own links, `sourcesPerProduct`, the research / image mode, the extract/vision model, `minFit` or the preferred sites change (a signature is stored with the research; research saved before this update is kept).

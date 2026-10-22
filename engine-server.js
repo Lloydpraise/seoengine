@@ -240,6 +240,9 @@ app.put('/api/settings', wrap((req) => {
   if (typeof out.preferredSites === 'string') out.preferredSites = out.preferredSites.split('\n').map((x) => x.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]).filter(Boolean);
   if ('sourcesPerProduct' in out) out.sourcesPerProduct = Math.min(4, Math.max(1, +out.sourcesPerProduct || 3));
   for (const k of ['photoDetail', 'qaDetail']) if (k in out && !['low', 'auto', 'high'].includes(out[k])) delete out[k];
+  if ('imageMode' in out && !['once', 'full'].includes(out.imageMode)) delete out.imageMode;
+  if ('researchMode' in out && !['separate', 'merged'].includes(out.researchMode)) delete out.researchMode;
+  if ('maxSpendUsd' in out) out.maxSpendUsd = Math.max(0, +out.maxSpendUsd || 0);
   if ('concurrency' in out) out.concurrency = Math.min(5, Math.max(1, +out.concurrency || 2));
   store.db.settings = { ...store.db.settings, ...out };
   net.setBrowser(getSettings(store).useBrowser);

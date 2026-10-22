@@ -53,6 +53,7 @@ test('photo QA issues: conflicts between the admin name and the photo are flagge
 test('pipeline with a photo: different-looking competitor is demoted, writer and QA both see the photo, QA mismatch triggers one rewrite', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vis-'));
   const store = new Store(path.join(dir, 'store.json')); store.db.profiles.default = DEFAULT_PROFILE;
+  store.db.settings = { imageMode: 'full' };
   const eng = createEngine(store);
   const seenImages = { look: 0, writer: 0, qa: 0 };
   let qaRuns = 0, writerRuns = 0;
