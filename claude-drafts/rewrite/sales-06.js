@@ -1,0 +1,77 @@
+module.exports = {
+  153: {
+    meta: 'Stainless steel grill with adjustable height: control the heat for perfectly grilled meat, fish and veg. On wheels. Free delivery in Nairobi. Order now.',
+    short: 'Perfectly grilled food comes down to heat control. This stainless steel grill is a durable charcoal grill with an adjustable-height grilling surface, so you get juicy meat, fish and vegetables every time. It suits Kenyan restaurants, hotels, caterers and outdoor grilling events.',
+    feat: 'Sturdy stainless steel frame. This stainless steel grill resists corrosion and lasts in both commercial kitchens and outdoor settings.\n\nLarge grilling surface with grill bars. Cook plenty of meat, fish and vegetables evenly over charcoal, so you serve big orders and crowds faster.\n\nAdjustable height with chain and rack system. Raise or lower the grill bars over the charcoal tray to control the temperature, searing hot or cooking gently, without burning.\n\nCharcoal tray with good heat circulation. Holds the charcoal securely and keeps the heat even.\n\nLower shelf and two wheels. Store utensils and charcoal bags within reach, and roll the grill wherever you need it.',
+    why: 'We fabricate stainless steel grills in our own Nairobi workshop for restaurants, hotels and caterers.',
+  },
+  154: {
+    meta: 'Commercial Stainless Steel Two Burner Gas Cooker with brass valves: accurate flame control and a rust-free body for busy kitchens. Free Nairobi delivery.',
+    short: 'Two strong burners in a cooker built for daily commercial use. This commercial stainless steel two burner gas cooker is designed for busy kitchens such as restaurants and hotels in Kenya, with brass control valves for accurate flame control and a durable stainless steel body that lasts.',
+    feat: 'All stainless steel construction. This Commercial Stainless Steel Two Burner Gas Cooker gives excellent durability and rust resistance in busy kitchen conditions, and it wipes clean quickly.\n\nTwo gas burners with brass control valves. Accurate flame adjustment means efficient cooking and less wasted gas.\n\nBlack burner grills. Sturdy support for pots and pans of every size.\n\nStainless steel lower shelf. Keep utensils and essentials close at hand.\n\nFour fixed stainless steel legs. A stable cooking platform that stays put once positioned.',
+    why: 'This two burner cooker is a solid, long-lasting option for restaurants and hotel kitchens.',
+    faqk: 'a commercial stainless steel two burner gas cooker',
+  },
+  155: {
+    meta: 'Mild Steel Two-Burner Gas Cooker: cook two dishes at once on LPG, light enough to move anywhere. For eateries and catering. Free delivery in Nairobi.',
+    short: 'Affordable, tough and easy to move. This Mild Steel Two-Burner Gas Cooker gives robust performance with a sturdy mild steel frame and two LPG burners, so small restaurants, food vendors, caterers and homes in Kenya can cook two dishes at once wherever they need to.',
+    feat: 'High-quality mild steel construction. This Mild Steel Two-Burner Gas Cooker stands up well to heat and daily use in busy kitchens.\n\nTwo burners. Cook multiple dishes at once and get meals out faster.\n\nLPG with manual ignition. Safe, dependable operation with simple controls.\n\nLightweight, portable design. Easy to move or reposition, ideal for street food vendors, small restaurants and outdoor catering.\n\nBlack painted finish. A practical look for commercial and home kitchens.',
+    why: 'We build mild steel gas cookers for small businesses and caterers across Kenya.',
+  },
+  156: {
+    meta: 'Mild steel 3 burner gas stove with brass knobs: run three pots at once with precise control. Portable for catering. Free delivery in Nairobi. Order now.',
+    short: 'Three burners give your kitchen the extra capacity it needs at rush hour. This mild steel 3 burner gas stove has a robust frame and three separately controlled burners, designed for commercial kitchens and catering businesses across Kenya.',
+    feat: 'Sturdy mild steel frame on four solid legs. This mild steel 3 burner gas stove stays stable under heavy pots and stands up to regular use in busy kitchens.\n\nThree burners with individual brass knobs. Precise flame adjustment for each burner, so you simmer, fry and boil at the same time.\n\nCopper-coloured gas tubes. Durable connections for safe gas flow.\n\nSimple design. Cleaning and maintenance are quick.\n\nPortable frame. Easy to move for catering jobs and outdoor cooking.',
+    why: 'We make mild steel gas stoves for restaurants, caterers and institutions across Kenya.',
+  },
+  157: {
+    meta: 'Two Burner Commercial Gas Stove: strong open frame that holds big sufurias and cooks two dishes at once. For vendors and eateries. Free Nairobi delivery.',
+    short: 'Two burners, a tough frame and room for big sufurias. This Two Burner Commercial Gas Stove gives street vendors, small restaurants and catering businesses in Kenya an efficient, no-fuss way to cook two dishes at once.',
+    feat: 'Sturdy open metal frame. This Two Burner Commercial Gas Stove is built to withstand heavy daily use in busy commercial kitchens.\n\nTwo burners. Cook two dishes at the same time and serve customers faster.\n\nOpen design. Stable support for large pots and sufurias, with easy access for cleaning around the burners.\n\nBlue-gray painted finish. A durable, practical look.',
+    why: 'This stove is an affordable, dependable workhorse for vendors, eateries and caterers.',
+    faqk: 'a two burner commercial gas stove',
+  },
+  158: {
+    meta: 'Stainless Steel Multi Layer Trolley Cart with braked 4-inch wheels: move loads easily and safely. Rust-resistant. For hotels. Free delivery in Nairobi.',
+    short: 'Move more in one trip, safely and quietly. The Stainless Steel Multi Layer Trolley Cart is an essential asset for busy commercial environments in Kenya, made from durable SS201 stainless steel with smooth wheels and corrosion resistance, ideal for transporting items in hotels and hospitals.',
+    feat: 'SS201 stainless steel, 0.8mm thick. The Stainless Steel Multi Layer Trolley Cart offers robust durability and excellent rust resistance, so it stays hygienic and presentable.\n\nFour 4-inch TPR wheels, two with brakes. Easy, quiet manoeuvring through corridors and kitchens, and stable positioning when loading.\n\nMulti-layer design. Carry dishes, supplies, linen or medical items on several levels in one trip, saving staff time.\n\nEasy maintenance. Corrosion-resistant surfaces wipe clean quickly for heavy-duty daily use.',
+    why: 'We supply and fabricate stainless steel trolleys for hotels, hospitals and kitchens across Kenya.',
+  },
+  159: {
+    meta: 'Double Deep Chips Fryer 10L: two 10-litre tanks with precise electric control for crisp chips every batch. For restaurants. Free delivery in Nairobi.',
+    short: 'Two tanks mean twice the chips at rush hour. The Double Deep Chips Fryer 10L gives Kenyan restaurants, hotels and food businesses two 10-litre compartments with precise electric temperature control, so you fry more, faster, with consistent results.',
+    feat: 'Twin 10-litre compartments. The Double Deep Chips Fryer 10L delivers substantial frying capacity for busy food services: chips in one tank, chicken or fish in the other.\n\nHigh-quality stainless steel. Durable and hygienic, which helps you maintain high kitchen standards.\n\nElectric operation with adjustable temperature. Precise control gives consistently perfect frying results, which improves productivity and keeps customers happy.\n\nNo gas needed. Clean, simple operation with nothing to refill.',
+    why: 'This double fryer is one of our most popular fryers for chips shops and restaurants.',
+  },
+  160: {
+    meta: 'Commercial Two-Burner Gas Cooker in mild steel: precise flame control and portable design for busy kitchens and catering. Free delivery in Nairobi.',
+    short: 'Save time at peak hours with two dependable burners. This commercial two-burner gas cooker has a durable mild steel frame and precise flame control, ideal for restaurants, hotels and catering businesses across Kenya.',
+    feat: 'Sturdy mild steel frame. The commercial two-burner gas cooker withstands the rigours of busy commercial kitchens.\n\nTwo high-quality burners. Dependable heat for cooking two dishes at once, saving time during peak hours.\n\nPrecise control valves. Adjust the flame from simmering to rapid boiling, using only the gas you need.\n\nCompact, portable design. Space-saving and easy to move for on-site catering or kitchen changes.\n\nBlack finish. A clean, professional look that wipes down quickly.',
+    why: 'This two burner cooker is a practical choice for restaurants, hotels and caterers on the move.',
+  },
+  163: {
+    meta: 'Tandoori oven with insulated steel body: holds steady high heat for authentic naan, tikka and kebabs. For restaurants. Free delivery in Nairobi.',
+    short: 'Real tandoori flavour needs real tandoor heat. This tandoori oven has a cylindrical steel body with an insulated, heat-retaining interior for consistent high temperatures, helping restaurants, hotels and caterers in Kenya serve authentic tandoori dishes.',
+    feat: 'Insulated, heat-retaining lining. This tandoori oven holds steady high heat, which is exactly what tandoori cooking needs, and it uses less fuel to stay hot.\n\nHeat-resistant steel body. Durable enough for daily commercial kitchen use.\n\nBottom metal door. Control airflow and manage fuel easily during cooking.\n\nSturdy handles on each side. Safe handling and placement.\n\nSmooth surfaces. Quick cleaning keeps your kitchen hygienic.',
+    why: 'We fabricate tandoori ovens for restaurants and hotels across Kenya.',
+  },
+  166: {
+    meta: '3 burner gas stove with fuel-efficient burners: cook fast while using less gas. Heavy-duty frame for restaurants. Free delivery in Nairobi. Order now.',
+    short: 'Cook fast and spend less on gas. This 3 burner gas stove is an industrial-strength cooking solution for restaurants, hotels and catering businesses in Kenya, with a robust metal frame and efficient burners built for heavy use.',
+    feat: 'Sturdy black metal frame. This industrial 3 burner gas stove is designed for durability and heavy-duty use.\n\nThree burners with individual control knobs. Precise flame management for each burner, so you run three dishes at once.\n\nDurable burner grills. Stable support for large pots and pans at high heat.\n\nFuel-efficient burners. Reduced gas consumption without losing the heat you need for rapid cooking.\n\nOpen-frame design. Simple to clean and maintain in fast-paced kitchens.',
+    why: 'This industrial stove is built tough for Kenya\'s busy commercial kitchens.',
+  },
+  167: {
+    meta: 'Commercial Electric Steam Table Food Warmer 4-5 Pans: keeps dishes hot, covered and ready to serve. Stainless steel. Free delivery in Nairobi.',
+    short: 'Keep every dish hot and ready the moment a customer orders. This Commercial Electric Steam Table Food Warmer 4-5 Pans has pan wells with lids, perfect for Kenyan restaurants, hotels and catering businesses. Its stainless steel construction is durable and easy to clean.',
+    feat: 'Polished stainless steel. This Commercial Electric Steam Table Food Warmer 4-5 Pans resists corrosion and cleans easily in demanding kitchens.\n\n4 to 5 pan wells with lids. Keep several dishes hot and covered for better temperature and hygiene during service.\n\nAdjustable temperature dial. Simple control keeps food at the right serving temperature.\n\nOpen stainless steel shelf below. Store trays, utensils or extra pans close at hand.',
+    why: 'This steam table is a reliable choice for restaurants, canteens and caterers serving hot food.',
+    faqk: 'a commercial electric steam table food warmer',
+  },
+  169: {
+    meta: 'Commercial 3 Burner Gas Cooker in stainless steel: reliable heat for heavy pots, with storage below. For restaurants. Free delivery in Nairobi.',
+    short: 'Three reliable burners for busy professional kitchens. This Commercial 3 Burner Gas Cooker has a robust stainless steel frame that resists corrosion, making it ideal for restaurants, hotels and catering businesses in Kenya.',
+    feat: 'Stainless steel construction. This commercial 3 burner gas cooker resists corrosion, so it is dependable for frequent commercial use.\n\nThree burners with brass nozzles. Reliable heat for every dish on your menu.\n\nCast iron or removable grates. Support heavy cookware and lift out for cleaning.\n\nOpen bottom shelf. Extra storage for utensils or cylinders keeps your kitchen organised.\n\nFree-standing design. Position it wherever your kitchen needs it.',
+    why: 'This three burner cooker is a dependable everyday cooker for restaurants and hotels.',
+  },
+};

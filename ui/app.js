@@ -68,7 +68,7 @@ function connect() {
 }
 
 /* ---------- queue ---------- */
-const visible = () => S.products.filter((p) => (S.filter === 'all' || p.status === S.filter) && (!S.q || (p.name || p.localImage || '').toLowerCase().includes(S.q.toLowerCase())));
+const visible = () => S.products.filter((p) => (S.filter === 'all' || (S.filter === 'claude' ? p.origin === 'claude' && p.status === 'review' : p.status === S.filter)) && (!S.q || (p.name || p.localImage || '').toLowerCase().includes(S.q.toLowerCase())));
 function viewQueue() {
   main.innerHTML = `<h1>Queue</h1>
   <p class="lede">Every product the AI will work on. Each one is researched against Kenyan search results and competitor pages, checked, and then waits for your review. Nothing reaches your live site until you approve it.</p>
@@ -79,7 +79,8 @@ function viewQueue() {
 function renderChips() {
   const el = $('#chips'); if (!el) return;
   const c = {}; S.products.forEach((p) => (c[p.status] = (c[p.status] || 0) + 1));
-  el.innerHTML = [['all', 'All', S.products.length], ...STATUS.map((s) => [s, LABEL[s], c[s] || 0])]
+  const fromClaude = S.products.filter((p) => p.origin === 'claude' && p.status === 'review').length;
+  el.innerHTML = [['all', 'All', S.products.length], ...STATUS.map((s) => [s, LABEL[s], c[s] || 0]), ...(fromClaude ? [['claude', 'Claude drafts to review', fromClaude]] : [])]
     .map(([k, l, n]) => `<button class="chip" data-act="filter" data-v="${k}" aria-pressed="${S.filter === k}">${l} ${n}</button>`).join('');
 }
 function renderBar() {
@@ -153,6 +154,7 @@ function viewAdd() {
     <label for="a-unique">Your product knowledge (optional)</label><textarea id="a-unique"></textarea>
     <div class="row" style="margin-top:12px"><button class="btn primary" data-act="addOne" data-q="0">Add product</button><button class="btn" data-act="addOne" data-q="1">Add and queue</button></div></div>
   <div class="card"><h2>Products already on your site</h2><p class="muted">Reads your Supabase products table and brings each product in for an SEO rewrite. Publishing later updates only the SEO fields. Names, URLs and prices stay untouched.</p><button class="btn" data-act="importSite">Import from Supabase</button></div>
+  <div class="card"><h2>Drafts written by Claude</h2><p class="muted">Loads the SEO drafts in the claude-drafts folder into To review, each with Claude's photo and competitor notes. Nothing is published until you approve and publish it.</p><button class="btn" data-act="importClaude">Import Claude drafts</button></div>
   </div>`;
   const drop = $('#drop'), fi = $('#files');
   fi.onchange = () => upload([...fi.files]);
@@ -187,14 +189,45 @@ function viewReview() {
   else if (list.length) openReview(list[0].id);
   else { S.rv = null; $('#ed').innerHTML = `<div class="empty">${S.rvTab === 'review' ? 'Nothing waiting for review.<br>Queue products and start the AI, then come back.' : 'Nothing approved yet.'}</div>`; $('#pvp').innerHTML = ''; $('#ev').innerHTML = ''; }
 }
+// Publishes one product at a time through the same endpoint as the single Publish button, so progress can be shown.
+async function bulkPublish(label, ids, approveFirst) {
+  const name = (id) => (S.products.find((p) => p.id === id) || {}).name || id;
+  S.bulk = { label, total: ids.length, done: 0, ok: 0, failed: [], running: true };
+  paintApproveAll();
+  for (const id of ids) {
+    try {
+      if (approveFirst) await post(`/products/${id}/approve`);
+      await post(`/products/${id}/publish`);
+      S.bulk.ok++;
+    } catch (e) { S.bulk.failed.push(`${name(id)}: ${e.message}`); }
+    S.bulk.done++;
+    paintApproveAll();
+  }
+  S.bulk.running = false;
+  S.rv = null; await load();
+}
 function paintApproveAll() {
   const el = $('#aabar'); if (!el) return;
-  if (S.rvTab !== 'review') { el.innerHTML = ''; return; }
+  const b = S.bulk;
+  // While a bulk publish runs (and after it ends) the bar shows its progress and result instead of the buttons
+  if (b) {
+    el.innerHTML = b.running
+      ? `<div class="card" style="flex:1"><span class="spin"></span><b>${esc(b.label)}: ${b.done} of ${b.total}</b> <span class="muted small">${b.ok} published${b.failed.length ? `, ${b.failed.length} failed` : ''}. Keep this tab open until it finishes.</span></div>`
+      : `<div class="card" style="flex:1"><b>${b.ok} of ${b.total} published.</b>${b.failed.length ? ` ${b.failed.length} failed:<ul class="small" style="margin:6px 0 0;padding-left:18px">${b.failed.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ' Everything went live.'} <button class="btn" data-act="bulkDone" style="margin-left:8px">OK</button></div>`;
+    return;
+  }
+  if (S.rvTab !== 'review') {
+    const m = S.products.filter((p) => p.status === 'approved').length;
+    el.innerHTML = `<button class="btn good giant" data-act="publishApproved" ${m ? '' : 'disabled'}>${m ? `Publish all ${m} approved` : 'Nothing approved waiting to publish'}<small>${m ? 'Sends every approved page to your live site, one at a time.' : 'Approved pages appear here until you publish them.'}</small></button>`;
+    return;
+  }
   const ready = S.products.filter((p) => p.status === 'review');
   const bad = ready.filter((p) => p.qaErrors).length;
   const busy = S.products.filter((p) => p.status === 'working' || p.status === 'queued').length;
   const n = ready.length;
-  el.innerHTML = `<button class="btn good giant" data-act="approveAll" ${n ? '' : 'disabled'}>${n ? `Approve all ${n} product${n === 1 ? '' : 's'}` : 'Nothing to approve yet'}<small>${n ? `${bad ? `${bad} with failed checks will be approved too. ` : ''}Nothing is published. Edit any of them afterwards under Approved.` : 'Pages appear here as the AI finishes them.'}</small></button>${busy ? `<span class="muted small"><span class="spin"></span>${busy} still being written</span>` : ''}`;
+  el.innerHTML = `<button class="btn good giant" data-act="approveAll" ${n ? '' : 'disabled'}>${n ? `Approve all ${n} product${n === 1 ? '' : 's'}` : 'Nothing to approve yet'}<small>${n ? `${bad ? `${bad} with failed checks will be approved too. ` : ''}Nothing is published. Edit any of them afterwards under Approved.` : 'Pages appear here as the AI finishes them.'}</small></button>`
+    + (n ? `<button class="btn primary giant" data-act="approvePublishAll">Approve and publish all ${n}<small>${bad ? `${bad} with failed checks will go live too. ` : ''}Every page goes to your live site, one at a time.</small></button>` : '')
+    + `${busy ? `<span class="muted small"><span class="spin"></span>${busy} still being written</span>` : ''}`;
 }
 function renderReviewList() {
   paintApproveAll();
@@ -303,7 +336,7 @@ function paintEvidence() {
   const el = $('#ev'); if (!el || !S.rv) return; const { p } = S.rv; const q = p.qa; const r = p.research || {}; const facts = (p.facts && p.facts.facts) || [];
   const checks = q ? (q.issues.length ? q.issues.map((i) => `<div class="issue ${i.level}">${esc(i.msg)}</div>`).join('') : '<div class="okbox">All checks passed</div>') + `<div class="small muted" style="margin-top:6px">${q.stats.words} words · wording overlap ${Math.round(q.stats.overlap * 100)}% · similarity to your other pages ${Math.round(q.stats.duplicate * 100)}%</div>` : '<span class="muted">Not checked yet</span>';
   const factsHtml = (facts.length ? facts.map((f) => `<div class="fact"><span><b>${esc(f.label)}:</b> ${esc(f.value)}</span><span class="${f.confidence === 'low' ? 'lo' : 'muted'}">${esc(f.confidence)}</span><span class="small muted" style="grid-column:1/-1">${esc((f.hosts || []).join(', '))}</span></div>`).join('') : '<span class="muted">None found. The copy relies on your notes.</span>') + (p.facts && p.facts.variant_warning ? `<div class="issue warn" style="margin-top:6px">${esc(p.facts.variant_warning)}</div>` : '') + ((p.facts && p.facts.conflicts) || []).map((c) => `<div class="issue warn" style="margin-top:6px">Sources disagree on ${esc(c.label)}: ${esc((c.values || []).join(' vs '))}</div>`).join('');
-  const sources = ((r.sources || []).map((s) => `<div class="small" style="margin-bottom:6px"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.host)}</a><br><span class="muted">${s.words} words · ${s.faqs} FAQs · ${s.specs} specs · ${Math.round((s.fit || 0) * 100)}% match</span>${s.photo === 'different' ? '<br><span class="lo">Its photo shows a different product</span>' : s.photo === 'similar' ? '<br><span class="lo">Its photo looks similar, not identical</span>' : s.photo === 'same' ? '<br><span class="muted">Its photo matches yours</span>' : ''}${s.structureOnly ? '<br><span class="lo">Different size or model: used for structure only</span>' : ''}</div>`).join('') || '<span class="muted">None</span>') + (r.warnings || []).map((w) => `<div class="issue warn">${esc(w)}</div>`).join('');
+  const sources = ((r.sources || []).map((s) => `<div class="small" style="margin-bottom:6px"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.host)}</a><br><span class="muted">${s.claude ? 'Read by Claude for Kenyan wording, keywords and market specs. Its photo does not match yours.' : `${s.words} words · ${s.faqs} FAQs · ${s.specs} specs · ${Math.round((s.fit || 0) * 100)}% match`}</span>${s.photo === 'different' ? '<br><span class="lo">Its photo shows a different product</span>' : s.photo === 'similar' ? '<br><span class="lo">Its photo looks similar, not identical</span>' : s.photo === 'same' ? '<br><span class="muted">Its photo matches yours</span>' : ''}${s.structureOnly ? '<br><span class="lo">Different size or model: used for structure only</span>' : ''}</div>`).join('') || '<span class="muted">None</span>') + (r.warnings || []).map((w) => `<div class="issue warn">${esc(w)}</div>`).join('');
   const kw = (r.keywords && r.keywords.related || []).length ? `<div class="tags">${r.keywords.related.map((k) => `<span class="tag">${esc(k)}</span>`).join('')}</div>` : '';
   const qs = (r.keywords && r.keywords.questions || []).map((k) => `<div class="small" style="margin-top:4px">${esc(k)}</div>`).join('');
   el.innerHTML = evCard('AI notes & confidence', aiNotesHtml(p)) +
@@ -339,7 +372,10 @@ const approve = guard(async (go) => {
   await flushSave();
   const id = S.rv.id, next = nextReview();
   await post(`/products/${id}/approve`);
-  if (go === 2) { toast('Publishing…'); const r = await post(`/products/${id}/publish`); toast('Published: ' + r.url); } else toast('Approved');
+  if (go === 2) {
+    toast('Publishing…');
+    try { const r = await post(`/products/${id}/publish`); toast('Published: ' + r.url); } catch (e) { toast(`Approved, but publishing failed: ${e.message}. It is under Approved; try Publish all approved.`, true); await openReview(id); return; }
+  } else toast('Approved');
   if (go === 1 || go === 2) { if (next) await openReview(next.id); else { S.rv = null; viewReview(); } } else { await openReview(id); }
 });
 
@@ -493,6 +529,7 @@ const ACTS = {
     toast(a.dataset.q === '1' ? 'Added and queued' : 'Added'); ['a-name', 'a-links', 'a-unique'].forEach((i) => ($('#' + i).value = '')); renderNav();
   }),
   scan: guard(async () => { const r = await post('/scan-images', {}); toast(`${r.added} photo(s) added${r.skippedOld ? `. ${r.skippedOld} already done by the old pipeline were skipped.` : ''}`); }),
+  importClaude: guard(async () => { toast('Loading Claude drafts…'); const r = await post('/import-claude-drafts'); toast(`${r.added + r.updated + (r.inReview || 0)} drafts ready to review${r.unchanged ? `, ${r.unchanged} unchanged and already approved or published` : ''}${r.skipped.length - (r.unchanged || 0) ? `, ${r.skipped.length - (r.unchanged || 0)} skipped` : ''}`); await load(); S.view = 'queue'; S.filter = 'claude'; render(); }),
   importSite: guard(async () => { toast('Reading your products…'); const r = await post('/import-supabase'); toast(`${r.added} products imported`); await load(); S.view = 'add'; render(); }),
   rvTab: (a) => { S.rvTab = a.dataset.v; S.rv = null; viewReview(); },
   openRv: (a) => openReview(a.dataset.id),
@@ -511,6 +548,18 @@ const ACTS = {
     toast(`${r.approved} approved${r.skipped ? `, ${r.skipped} skipped (nothing written yet)` : ''}. Edit any of them under Approved.`);
     S.rvTab = 'approved'; S.rv = null; await load();
   }),
+  approvePublishAll: guard(async () => {
+    const ids = S.products.filter((p) => p.status === 'review').map((p) => p.id);
+    if (!ids.length || !confirm(`Approve and publish all ${ids.length} products to your live site now?`)) return;
+    await flushSave();
+    await bulkPublish('Approving and publishing', ids, true);
+  }),
+  publishApproved: guard(async () => {
+    const ids = S.products.filter((p) => p.status === 'approved').map((p) => p.id);
+    if (!ids.length || !confirm(`Publish all ${ids.length} approved products to your live site now?`)) return;
+    await bulkPublish('Publishing', ids, false);
+  }),
+  bulkDone: () => { S.bulk = null; paintApproveAll(); },
   togglePane: (a) => {
     const k = a.dataset.v; S.panes[k] = !S.panes[k]; savePanes();
     const g = $('#rvgrid'); if (g) g.classList.toggle(k + '-off', !!S.panes[k]);

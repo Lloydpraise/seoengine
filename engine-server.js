@@ -129,6 +129,15 @@ app.post('/api/scan-images', wrap((req) => {
 
 app.post('/api/import-supabase', wrap(async () => ({ added: await engine.importFromSupabase() })));
 
+// Drafts Claude wrote (claude-drafts/*.json) go straight to "To review"
+app.post('/api/import-claude-drafts', wrap(async () => {
+  const dir = path.join(__dirname, 'claude-drafts');
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /^batch-.*\.json$/.test(f)).sort() : [];
+  if (!files.length) throw new Error('No drafts found in the claude-drafts folder');
+  const drafts = files.flatMap((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+  return engine.importDrafts(drafts);
+}));
+
 app.post('/api/products/:id/find-sources', wrap(async (req) => {
   const p = getP(req);
   const kenya = require('./lib/kenya');
